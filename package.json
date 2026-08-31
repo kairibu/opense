@@ -1,0 +1,40 @@
+{
+  "name": "opense-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenSE — a pi-web browser plugin that parses SysML v2 models in the workspace and renders diagnostics, outline, and element details (vendored sysml-parser bundle).",
+  "type": "module",
+  "license": "EPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kai/opense-package.git"
+  },
+  "piWeb": {
+    "plugins": [
+      { "id": "opense", "browserRoot": ".", "module": "pi-web-plugin.js" }
+    ]
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "dist/pi-web-plugin.js",
+  "scripts": {
+    "build": "node scripts/build-plugin.mjs",
+    "dev": "node scripts/build-plugin.mjs --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
+  },
+  "peerDependencies": {
+    "@jmfederico/pi-web": ">=1.202608"
+  },
+  "devDependencies": {
+    "@jmfederico/pi-web": "^1.202608.2",
+    "@types/node": "^24.0.0",
+    "happy-dom": "^20.11.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
