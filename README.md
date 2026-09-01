@@ -1,13 +1,9 @@
 # opense-plugin
 
-OpenSE is a browser plugin for [pi-web](https://github.com/kai/pi-web): it
+OpenSE is a browser plugin for [pi-web](https://github.com/jmfederico/pi-web): it
 parses SysML v2 models found in the workspace and renders diagnostics, a
 model outline, and element details — entirely in the browser, no backend or
 semantic validation.
-
-This is a standalone repository; in the pi-web checkout it is consumed as a
-symlinked plugin directory (see "Consuming from pi-web" below) and is
-expected to become an installable pi-web plugin package in the future.
 
 ## Structure
 
@@ -31,13 +27,13 @@ All sources live under `src/`.
 - `src/test-support.ts` — shared test fixtures (in-memory workspace-files fake,
   entry/tree/content builders); excluded from the runtime build
 - `src/vendor/sysml-parser.bundle.js` — committed browser bundle of the
-  [sysml-parser](https://github.com/kai/sysml-parser) library (generated)
+  `sysml-parser` library (not shared yet)
 - `src/vendor/sysml-parser.bundle.d.ts` — hand-written minimal type surface for
   what this plugin consumes (NOT generated)
 
 ## The piWeb manifest
 
-`package.json` carries the plugin manifest the pi-web catalog discovers:
+`package.json` carries the plugin manifest for the pi-web catalog:
 
 ```json
 "piWeb": {
@@ -62,40 +58,23 @@ npm run typecheck  # tsc --noEmit
 
 The build script (`scripts/build-plugin.mjs`) uses the exact transpiler
 settings of pi-web's `scripts/build-plugins.mjs`, so `dist/` output is
-drop-in equivalent to what pi-web materializes from a symlinked plugin
+equivalent to what pi-web materializes from a symlinked plugin
 directory. Test files and `.d.ts` declarations are excluded from `dist/`
 (types are checked by `typecheck`; the plugin loads only the runtime
 bundle).
 
 ## The vendored sysml-parser bundle
 
-The in-browser parser is a pre-built ESM bundle, committed here under
-`src/vendor/`. The sysml-parser repository owns the toolchain: it produces the
-artifact with `npm run build:browser`
-(`dist/sysml-parser.browser.js`, provenance banner, bundled chevrotain
-version). To refresh the committed copy:
+The parser is a pre-built ESM bundle, committed here under
+`src/vendor/`. The sysml-parser is a separate repository.
+
+## Installation
+
+Symlink this repository into pi-web's plugin
+tree (pi-web handles symlinked plugin directories):
 
 ```sh
-# in the sysml-parser repo:  npm run build:browser
-cp ../sysml-parser/dist/sysml-parser.browser.js src/vendor/sysml-parser.bundle.js
+ln -s ./dist ~/.pi-web/plugins/opense
 ```
 
-Or, from the pi-web checkout, `npm run vendor:sysml` and copy the vendor
-directory here. The bundle header records its provenance — do not edit it by
-hand. When the parser gains API the plugin should use, also update the
-hand-written `src/vendor/sysml-parser.bundle.d.ts`.
-
-## Consuming from pi-web
-
-Development setup: symlink this repository into pi-web's bundled plugin
-tree (pi-web's build and runtime catalog both handle symlinked plugin
-directories):
-
-```sh
-ln -s ../../opense-package /path/to/pi-web/pi-web-plugins/opense
-```
-
-pi-web then builds, serves, and discovers the plugin exactly as if the
-sources lived in the checkout. As an installable package, the plan is to
-publish this repository (drop `private`, finalize the package name) and
-have pi-web install it into its plugin root.
+pi-web then discovers and serves the plugin.
