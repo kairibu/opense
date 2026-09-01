@@ -46,6 +46,7 @@ import { openseReportFromWorkspace } from "./opense-contract.js";
 import type { OpenseDiscoveryFiles } from "./opense-discovery.js";
 import { discoverOpenseFiles } from "./opense-discovery.js";
 import { elementDetails, namedOutlineKinds, outlineRows, type OpenseElementDetails, type OpenseOwnedElement } from "./opense-outline.js";
+import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
 
 const OPENSE_PANEL_LOCAL_ID = "workspace.opense";
 // Keep parse state for a few recent workspaces so reports survive panel
@@ -131,6 +132,7 @@ export function createOpenseBrowserContributions(
   const panelId = `${runtimePluginId}:${OPENSE_PANEL_LOCAL_ID}`;
   const controller = new OpenseUiController();
   defineOpensePanelActivityElement();
+  defineOpenseActionPaletteElement();
   return {
     actions: createOpenseActions(panelId),
     workspacePanels: [createOpensePanel(html, svg, controller)],
@@ -471,7 +473,18 @@ function renderDetail(html: HtmlTemplateTag, controller: OpenseUiController, con
   if (details === undefined) {
     return html`<p class="opense-muted">This element is no longer available. Run Parse again.</p>`;
   }
-  return renderElementDetails(html, controller, context, details);
+  return html`
+    ${renderElementDetails(html, controller, context, details)}
+    <!-- Action palette pinned to the bottom of the details pane (syside
+         prior art): Copy name / Investigate / Task for this element. The
+         subject is the qualified name when present, falling back to the name
+         and finally the index id — always something the prompt can address. -->
+    <pi-web-opense-action-palette
+      .subject=${details.qualifiedName ?? details.name ?? details.id}
+      .filepath=${details.declaringFile}
+      .context=${context}
+    ></pi-web-opense-action-palette>
+  `;
 }
 
 function renderElementDetails(
@@ -611,8 +624,13 @@ const opensePanelStyles = `
   .opense-panel .opense-error { flex: 0 0 auto; margin: 8px; border: 1px solid var(--pi-danger); border-radius: 7px; color: var(--pi-danger); padding: 8px; }
   .opense-panel .opense-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
   .opense-panel .opense-split { height: 100%; display: grid; grid-template-rows: minmax(140px, 40%) minmax(0, 1fr); }
-  .opense-panel .opense-left, .opense-panel .opense-right { min-height: 0; overflow: auto; }
-  .opense-panel .opense-left { border-bottom: 1px solid var(--pi-border-muted); }
+  .opense-panel .opense-left, .opense-panel .opense-right { min-height: 0; }
+  .opense-panel .opense-left { border-bottom: 1px solid var(--pi-border-muted); overflow: auto; }
+  /* Details pane: the detail content scrolls while the action palette stays
+     pinned to the bottom edge at its natural (button-row) height. */
+  .opense-panel .opense-right { display: flex; flex-direction: column; overflow: hidden; }
+  .opense-panel .opense-right .opense-detail { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  .opense-panel .opense-right pi-web-opense-action-palette { flex: 0 0 auto; }
   .opense-panel .opense-diagnostics { border-bottom: 1px solid var(--pi-border); padding: 6px; display: grid; gap: 5px; }
   .opense-panel .opense-diagnostic { display: flex; align-items: baseline; gap: 6px; border-radius: 6px; padding: 5px 7px; }
   .opense-panel .opense-diagnostic.opense-error { border: 1px solid var(--pi-danger); background: color-mix(in srgb, var(--pi-danger) 9%, transparent); }
@@ -630,7 +648,10 @@ const opensePanelStyles = `
   .opense-panel .opense-row .opense-kind { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
   .opense-panel .opense-row .opense-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .opense-panel .opense-row .opense-row-name.opense-unnamed { color: var(--pi-muted); font-style: italic; }
-  .opense-panel .opense-detail { padding: 12px; display: grid; gap: 8px; }
+  /* align-content: start — the detail grid grows with the pane (flex above),
+     and without this its auto rows would stretch to fill it, spreading the
+     content vertically instead of keeping fixed line spacing. */
+  .opense-panel .opense-detail { padding: 12px; display: grid; gap: 8px; align-content: start; }
   .opense-panel .opense-detail-head { display: flex; align-items: center; gap: 8px; }
   .opense-panel .opense-detail-head h3 { margin: 0; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .opense-panel .opense-kind-badge { border: 1px solid var(--pi-accent-border); border-radius: 999px; color: var(--pi-accent); padding: 1px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -647,6 +668,7 @@ const opensePanelStyles = `
   .opense-panel .opense-owned-row .opense-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .opense-panel .opense-owned-row .opense-row-name.opense-unnamed { color: var(--pi-muted); font-style: italic; }
   .opense-panel .opense-owned-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-muted); font-size: 12px; }
+  .opense-panel pi-web-opense-action-palette { border-top: 1px solid var(--pi-border-muted); padding: 8px 12px; background: var(--pi-bg); }
   .opense-panel .opense-empty { margin: 10px 12px; border: 1px dashed var(--pi-border-muted); border-radius: 8px; color: var(--pi-muted); padding: 12px; }
   .opense-panel .opense-empty p { margin: 0; }
 `;

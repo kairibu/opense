@@ -20,6 +20,7 @@ import type {
   WorkspacePanelContext,
 } from "@jmfederico/pi-web/plugin-api";
 import { createOpenseBrowserContributions } from "./opense-panel.js";
+import type { OpenseActionPaletteElement } from "./opense-panel-palette.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
@@ -88,7 +89,8 @@ describe("bundled OpenSE browser plugin", () => {
       },
     });
     const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
-    const context = panelContext(files);
+    const insertText = vi.fn();
+    const context = panelContext(files, openseWorkspace, "local", insertText);
 
     const container = document.createElement("div");
     document.body.append(container);
@@ -143,6 +145,26 @@ describe("bundled OpenSE browser plugin", () => {
     expect(detail.textContent).toContain("declared in model/good.sysml");
     const fields = [...detail.querySelectorAll(".opense-field")];
     expect(fields.map((field) => field.textContent)).toContain("TypeLensCell");
+
+    // Action palette pinned below the element details (syside prior art):
+    // a sibling of the detail section, bound to the selected element's
+    // subject and declaring file; Investigate inserts the fixed
+    // investigation prompt into the prompt editor.
+    const right = container.querySelector<HTMLElement>(".opense-right");
+    if (right === null) throw new Error("Expected the details pane");
+    const palette = right.querySelector<OpenseActionPaletteElement>("pi-web-opense-action-palette");
+    if (palette === null) throw new Error("Expected the action palette below the element details");
+    // Pinned-footer layout: the detail section precedes the palette, and the
+    // palette is a flex item at the bottom edge of the details pane.
+    expect(detail.compareDocumentPosition(palette) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(palette.subject).toBe("Tracker::Parts::lens");
+    expect(palette.filepath).toBe("model/good.sysml");
+    palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-copy-name")?.click();
+    expect(insertText).toHaveBeenCalledWith("Tracker::Parts::lens");
+    palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-investigate")?.click();
+    expect(insertText).toHaveBeenCalledWith(
+      "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements. The element is located in model/good.sysml",
+    );
 
     // The Parse button re-runs the job; onInvalidate re-runs it too.
     // One discovery walk lists the root and the nested model/ directory.
@@ -438,7 +460,12 @@ function requiredPanel(contributions: ReturnType<typeof createOpenseBrowserContr
   return panel;
 }
 
-function panelContext(fake: ReturnType<typeof fakeFiles>, workspace = openseWorkspace, machineId = "local"): WorkspacePanelContext {
+function panelContext(
+  fake: ReturnType<typeof fakeFiles>,
+  workspace = openseWorkspace,
+  machineId = "local",
+  insertText: (text: string) => void = () => undefined,
+): WorkspacePanelContext {
   const files = fake.files;
   const noop = () => undefined;
   return {
@@ -447,7 +474,7 @@ function panelContext(fake: ReturnType<typeof fakeFiles>, workspace = openseWork
     state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
     files,
     host: { requestRender: noop },
-    prompt: { insertText: noop, getText: () => "", getSelection: () => null },
+    prompt: { insertText, getText: () => "", getSelection: () => null },
     terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
   };
 }

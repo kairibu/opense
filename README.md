@@ -15,6 +15,10 @@ expected to become an installable pi-web plugin package in the future.
   `PiWebPlugin` activation descriptor (apiVersion 2) the host loads
 - `opense-panel.ts` — panel UI and contributions factory (lit custom
   elements; drives the parse on connect)
+- `opense-panel-palette.ts` — action palette below the element details
+  (vanilla custom element: Investigate, Task, and Copy name insert prompts
+  into the session prompt editor)
+- `opense-prompts.ts` — pure prompt builders used by the action palette
 - `opense-contract.ts` — the single boundary to the vendored parser: loads
   the bundle, adapts its results to plugin-local shapes
 - `opense-discovery.ts` — workspace file discovery (`*.sysml` sources)
