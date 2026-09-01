@@ -14,7 +14,7 @@ import {
   type ModelIndex,
   type SysmlModel,
 } from "./vendor/sysml-parser.bundle.js";
-import { elementDetails, namedOutlineKinds, outlineRows } from "./opense-outline.js";
+import { elementDetails, namedOutlineKinds, namedOutlineRows, outlineRows } from "./opense-outline.js";
 
 const originStub = { originOf: () => undefined };
 
@@ -113,6 +113,56 @@ describe("outline over a real merged loadModel workspace", () => {
 
   it("reports the named kinds only, so all-unnamed kinds offer no filter button", () => {
     expect(namedOutlineKinds(index)).toEqual(["package", "part", "requirement"]);
+  });
+
+  it("lists named rows with their nesting depth, unnamed rows excluded", () => {
+    expect(namedOutlineRows(index)).toEqual([
+      { row: { id: "Tracker", kind: "package", name: "Tracker", qualifiedName: "Tracker" }, depth: 0 },
+      {
+        row: { id: "Tracker::Parts", kind: "package", name: "Parts", qualifiedName: "Tracker::Parts", parentId: "Tracker" },
+        depth: 1,
+      },
+      {
+        row: {
+          id: "Tracker::Parts::lens",
+          kind: "part",
+          name: "lens",
+          qualifiedName: "Tracker::Parts::lens",
+          parentId: "Tracker::Parts",
+        },
+        depth: 2,
+      },
+      {
+        row: {
+          id: "Tracker::Parts::mount",
+          kind: "part",
+          name: "mount",
+          qualifiedName: "Tracker::Parts::mount",
+          parentId: "Tracker::Parts",
+        },
+        depth: 2,
+      },
+      {
+        row: {
+          id: "Tracker::'needs focus'",
+          kind: "requirement",
+          name: "needs focus",
+          qualifiedName: "Tracker::'needs focus'",
+          parentId: "Tracker",
+        },
+        depth: 1,
+      },
+    ]);
+  });
+
+  it("honors the kind filter; depth spans the rows present in the filtered list", () => {
+    const filtered = namedOutlineRows(index, { kind: "part" });
+    expect(filtered.map(({ row }) => row.id)).toEqual(["Tracker::Parts::lens", "Tracker::Parts::mount"]);
+    // The filtered list has no package rows, so the parentId chain resolves
+    // only within it: depth 1, not the unfiltered depth 2. (Unnamed rows that
+    // PASS the filter — e.g. a doc container between two named ones — do keep
+    // the chain intact; that is what the all-rows id map exists for.)
+    expect(filtered.map(({ depth }) => depth)).toEqual([1, 1]);
   });
 });
 

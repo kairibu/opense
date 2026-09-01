@@ -13,14 +13,20 @@ import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FileContentResponse,
-  FileTreeResponse,
   PluginRuntimeContext,
   Workspace,
-  WorkspaceFiles,
   WorkspacePanelContext,
 } from "@jmfederico/pi-web/plugin-api";
 import { createOpenseBrowserContributions } from "./opense-panel.js";
 import type { OpenseActionPaletteElement } from "./opense-panel-palette.js";
+import {
+  createFakeFiles,
+  dirEntry,
+  fileEntry,
+  text,
+  tree,
+  type FakeWorkspaceFiles,
+} from "./test-support.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
@@ -41,7 +47,7 @@ describe("bundled OpenSE browser plugin", () => {
   it("contributes an always-visible panel and two unconditional shortcut actions", async () => {
     const contributions = createOpenseBrowserContributions("opense", html, svg);
     const panel = requiredPanel(contributions);
-    const context = panelContext(fakeFiles({ trees: {} }));
+    const context = panelContext(createFakeFiles({ trees: {} }));
 
     expect(panel.id).toBe("workspace.opense");
     expect(panel.title).toBe("OpenSE");
@@ -49,7 +55,7 @@ describe("bundled OpenSE browser plugin", () => {
     expect(panel.icon).toBeDefined();
     // Browser-only: no provider ownership, so visibility never gates.
     expect(panel.visible?.(context)).toBe(true);
-    expect(panel.visible?.(panelContext(fakeFiles({ trees: {} }), { ...openseWorkspace, id: "workspace-2" }))).toBe(true);
+    expect(panel.visible?.(panelContext(createFakeFiles({ trees: {} }), { ...openseWorkspace, id: "workspace-2" }))).toBe(true);
     expect(typeof panel.onInvalidate).toBe("function");
 
     const actions = contributions.actions ?? [];
@@ -73,7 +79,7 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("parses the workspace through the fake files adapter and renders diagnostics, outline, and element details", async () => {
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: {
         "": tree([dirEntry("model", "model")]),
         "model": tree([
@@ -180,7 +186,7 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("filters the outline by element kind and clears a filtered-out selection", async () => {
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: {
         "": tree([fileEntry("model.sysml", "model.sysml")]),
       },
@@ -222,7 +228,7 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("hides unnamed elements from the outline and reaches them through owned rows in the detail pane", async () => {
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
       reads: {
         "model.sysml": text(
@@ -270,7 +276,7 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("shows the empty workspace state when discovery finds no .sysml files", async () => {
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: {
         "": tree([fileEntry("readme.md", "readme.md"), dirEntry("docs", "docs")]),
         "docs": tree([fileEntry("guide.txt", "docs/guide.txt")]),
@@ -294,7 +300,7 @@ describe("bundled OpenSE browser plugin", () => {
 
   it("surfaces the loading state while a parse job is in flight, then renders the report", async () => {
     let resolveRead: ((value: FileContentResponse) => void) | undefined;
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: {
         "": tree([fileEntry("model.sysml", "model.sysml")]),
       },
@@ -330,11 +336,11 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("keeps one report per workspace in the LRU and reuses it on panel switches", async () => {
-    const alphaFiles = fakeFiles({
+    const alphaFiles = createFakeFiles({
       trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
       reads: { "a.sysml": text("package Alpha;") },
     });
-    const betaFiles = fakeFiles({
+    const betaFiles = createFakeFiles({
       trees: { "": tree([fileEntry("b.sysml", "b.sysml")]) },
       reads: { "b.sysml": text("package Beta;") },
     });
@@ -367,7 +373,7 @@ describe("bundled OpenSE browser plugin", () => {
   });
 
   it("marks the report stale while an onInvalidate parse is in flight", async () => {
-    const files = fakeFiles({
+    const files = createFakeFiles({
       trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
       reads: { "a.sysml": text("package Alpha;") },
     });
@@ -392,68 +398,6 @@ describe("bundled OpenSE browser plugin", () => {
   });
 });
 
-function fakeFiles(options: FakeFilesOptions): {
-  files: WorkspaceFiles;
-  listCalls: string[];
-  readFile: ReturnType<typeof vi.fn<WorkspaceFiles["readFile"]>>;
-} {
-  const listCalls: string[] = [];
-  const readFile = vi.fn<WorkspaceFiles["readFile"]>((path: string) => {
-    const read = options.reads?.[path];
-    if (read === undefined) return Promise.reject(new Error(`Path does not exist: ${path}`));
-    if (read instanceof Error) return Promise.reject(read);
-    return Promise.resolve(read);
-  });
-  return {
-    files: {
-      listFiles: vi.fn<WorkspaceFiles["listFiles"]>((path: string) => {
-        listCalls.push(path);
-        const error = options.listErrors?.[path];
-        if (error !== undefined) return Promise.reject(new Error(error));
-        const tree = options.trees?.[path];
-        if (tree === undefined) return Promise.reject(new Error(`Path does not exist: ${path}`));
-        return Promise.resolve(tree);
-      }),
-      readFile,
-      // Unused by the OpenSE panel; present so the fake stays a full WorkspaceFiles.
-      writeFile: () => Promise.reject(new Error("not implemented")),
-      deleteFile: () => Promise.reject(new Error("not implemented")),
-      moveFile: () => Promise.reject(new Error("not implemented")),
-    },
-    listCalls,
-    readFile,
-  };
-}
-
-interface FakeFilesOptions {
-  trees?: Record<string, FileTreeResponse>;
-  listErrors?: Record<string, string>;
-  reads?: Record<string, FileContentResponse | Error>;
-}
-
-function dirEntry(name: string, path: string): FileTreeEntryLike {
-  return { name, path, type: "directory" };
-}
-
-function fileEntry(name: string, path: string): FileTreeEntryLike {
-  return { name, path, type: "file" };
-}
-
-function tree(entries: FileTreeEntryLike[], truncated = false): FileTreeResponse {
-  return { path: "", entries, scannedAt: "", truncated };
-}
-
-function text(content: string): FileContentResponse {
-  return { path: "", content, truncated: false, binary: false, encoding: "utf8", size: 0, modifiedAt: "" };
-}
-
-/** The structural tree-entry subset the discovery walk branches on. */
-interface FileTreeEntryLike {
-  name: string;
-  path: string;
-  type: "file" | "directory" | "symlink";
-}
-
 function requiredPanel(contributions: ReturnType<typeof createOpenseBrowserContributions>) {
   const panel = contributions.workspacePanels?.[0];
   if (panel === undefined) throw new Error("Expected OpenSE workspace panel");
@@ -461,7 +405,7 @@ function requiredPanel(contributions: ReturnType<typeof createOpenseBrowserContr
 }
 
 function panelContext(
-  fake: ReturnType<typeof fakeFiles>,
+  fake: FakeWorkspaceFiles,
   workspace = openseWorkspace,
   machineId = "local",
   insertText: (text: string) => void = () => undefined,

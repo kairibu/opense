@@ -14,9 +14,9 @@
 //                             manifest the pi-web catalog discovers
 //   pi-web-plugin.js …      — transpiled sources ("// Generated from …")
 //   vendor/sysml-parser.bundle.js — verbatim copy (committed vendor asset)
-// Test files (*.test.ts) and .d.ts declarations are excluded, exactly like
-// pi-web's build: types are checked by `npm run typecheck`, and the plugin
-// loads only the runtime bundle.
+// Test files (*.test.ts), the shared test-support module, and .d.ts
+// declarations are excluded, exactly like pi-web's build: types are checked by
+// `npm run typecheck`, and the plugin loads only the runtime bundle.
 //
 // Usage: npm run build | npm run dev (--watch)
 // ---------------------------------------------------------------------------
@@ -39,6 +39,7 @@ const skippedNames = new Set([
   "LICENSE",
   "README.md",
   "package-lock.json",
+  "test-support.ts",
   "tsconfig.json",
   "vitest.config.ts",
   "vitest.config.mjs",

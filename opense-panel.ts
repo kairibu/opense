@@ -45,7 +45,8 @@ import type { OpenseWorkspaceReport, OutlineRow, WorkspaceDiagnostic } from "./o
 import { openseReportFromWorkspace } from "./opense-contract.js";
 import type { OpenseDiscoveryFiles } from "./opense-discovery.js";
 import { discoverOpenseFiles } from "./opense-discovery.js";
-import { elementDetails, namedOutlineKinds, outlineRows, type OpenseElementDetails, type OpenseOwnedElement } from "./opense-outline.js";
+import { elementDetails, namedOutlineKinds, namedOutlineRows, outlineRows, type OpenseElementDetails, type OpenseOwnedElement } from "./opense-outline.js";
+import { defineCustomElementOnce, formatUnknownError } from "./opense-shared.js";
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
 
 const OPENSE_PANEL_LOCAL_ID = "workspace.opense";
@@ -64,12 +65,9 @@ interface OpenseWorkspaceUiState {
   context: WorkspacePanelContext;
   /** False once the LRU evicts the workspace; late async writes are skipped. */
   retained: boolean;
-  /** Report with diagnostics + outline; undefined until the first parse. */
-  report: OpenseWorkspaceReport | undefined;
-  /** Model index of the current report, kept for kind listings and details. */
-  index: ModelIndex | undefined;
-  /** Parser workspace of the current report, kept for `originOf` lookups. */
-  workspace: ParserWorkspace | undefined;
+  /** Parse result (report + index + workspace); undefined until the first parse.
+   *  The three fields are always assigned together at the end of a parse. */
+  result: OpenseParseResult | undefined;
   loading: boolean;
   error: string | undefined;
   /** Set on onInvalidate; cleared when a fresh parse lands. */
@@ -155,7 +153,7 @@ class OpenseUiController {
     this.connectedWorkspaceKey = key;
     // Kick the first parse on connect. Later parses reuse the in-flight job
     // through the parseRequest guard, so overlapping jobs never run.
-    if (state.report === undefined && state.parseRequest === undefined) void this.parse(context);
+    if (state.result === undefined && state.parseRequest === undefined) void this.parse(context);
   }
 
   disconnect(context: WorkspacePanelContext): void {
@@ -166,7 +164,7 @@ class OpenseUiController {
    *  connected workspace (browser-only plugin — no owned-workspace gate). */
   invalidate(context: WorkspacePanelContext): Promise<void> {
     const state = this.stateFor(context);
-    state.stale = state.report !== undefined;
+    state.stale = state.result !== undefined;
     this.requestRender(state);
     return this.parse(context);
   }
@@ -188,9 +186,7 @@ class OpenseUiController {
         // from the named kinds (an all-unnamed kind could never match).
         const kinds = namedOutlineKinds(result.index);
         if (state.kindFilter !== undefined && !kinds.includes(state.kindFilter)) state.kindFilter = undefined;
-        state.report = result.report;
-        state.index = result.index;
-        state.workspace = result.workspace;
+        state.result = result;
         state.stale = false;
         state.error = undefined;
         // A re-parse may drop the selected element (file removed/edited);
@@ -198,7 +194,7 @@ class OpenseUiController {
         state.selectedId = selectionIn(result.report.outline, state.kindFilter, state.selectedId);
       })
       .catch((error: unknown) => {
-        if (state.retained) state.error = errorMessage(error);
+        if (state.retained) state.error = formatUnknownError(error);
       })
       .finally(() => {
         if (state.parseRequest !== request) return;
@@ -220,7 +216,7 @@ class OpenseUiController {
     const state = this.stateFor(context);
     state.kindFilter = kind;
     // A filtered-out selection would leave a dangling detail pane; drop it.
-    if (state.report !== undefined) state.selectedId = selectionIn(state.report.outline, state.kindFilter, state.selectedId);
+    if (state.result !== undefined) state.selectedId = selectionIn(state.result.report.outline, state.kindFilter, state.selectedId);
     this.requestRender(state);
   }
 
@@ -238,9 +234,7 @@ class OpenseUiController {
     const created: OpenseWorkspaceUiState = {
       context,
       retained: true,
-      report: undefined,
-      index: undefined,
-      workspace: undefined,
+      result: undefined,
       loading: false,
       error: undefined,
       stale: false,
@@ -328,7 +322,7 @@ function renderOpensePanel(html: HtmlTemplateTag, controller: OpenseUiController
         <strong>OpenSE</strong>
         ${state.stale ? html`<span class="opense-stale">stale</span>` : null}
         <div class="opense-toolbar-actions">
-          ${state.report === undefined ? null : html`<span class=${state.report.ok ? "opense-status ok" : "opense-status issues"}>${state.report.ok ? "ok" : "issues"}</span>`}
+          ${state.result === undefined ? null : html`<span class=${state.result.report.ok ? "opense-status ok" : "opense-status issues"}>${state.result.report.ok ? "ok" : "issues"}</span>`}
           <button type="button" ?disabled=${state.loading} @click=${() => { void controller.parse(context); }}>Parse</button>
         </div>
       </section>
@@ -341,7 +335,7 @@ function renderOpensePanel(html: HtmlTemplateTag, controller: OpenseUiController
 }
 
 function renderOpenseBody(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const report = state.report;
+  const report = state.result?.report;
   if (report === undefined) {
     return html`<p class="opense-muted opense-standalone">${state.loading ? "Parsing workspace…" : "Run Parse to build the model outline."}</p>`;
   }
@@ -360,7 +354,7 @@ function renderOpenseBody(html: HtmlTemplateTag, controller: OpenseUiController,
 }
 
 function renderDiagnostics(html: HtmlTemplateTag, state: OpenseWorkspaceUiState) {
-  const diagnostics = state.report?.diagnostics;
+  const diagnostics = state.result?.report.diagnostics;
   if (diagnostics === undefined || diagnostics.length === 0) return null;
   return html`
     <section class="opense-diagnostics" aria-label="Diagnostics">
@@ -382,7 +376,7 @@ function renderDiagnostic(html: HtmlTemplateTag, diagnostic: WorkspaceDiagnostic
 }
 
 function renderKindFilter(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const index = state.index;
+  const index = state.result?.index;
   if (index === undefined) return null;
   const kinds = namedOutlineKinds(index);
   if (kinds.length === 0) return null;
@@ -409,28 +403,19 @@ function renderKindButton(
 }
 
 function renderOutline(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const report = state.report;
-  const index = state.index;
-  if (report === undefined || index === undefined) return null;
-  if (report.parsedFileCount === 0) {
+  const result = state.result;
+  if (result === undefined) return null;
+  if (result.report.parsedFileCount === 0) {
     return html`<section class="opense-empty"><p>${EMPTY_WORKSPACE_MESSAGE}</p></section>`;
   }
   const filter = state.kindFilter === undefined ? undefined : { kind: state.kindFilter };
-  const allRows = outlineRows(index, filter);
-  // Unnamed elements (doc, import, succession, …) stay out of the list; they
-  // surface as owned members in the detail pane, reachable by clicking.
-  const rows = allRows.filter((row) => row.name !== undefined);
+  const rows = namedOutlineRows(result.index, filter);
   if (rows.length === 0) {
     return html`<p class="opense-muted">No ${state.kindFilter ?? "elements"} in the parsed model.</p>`;
   }
-  // Rows are a flattened document-order list; nesting is derived from
-  // parentId chains so indentation comes from depth, not template recursion.
-  // The id map spans ALL rows (unnamed included) so depths stay correct even
-  // if a nameless container ever sits between two named ones.
-  const rowsById = new Map(allRows.map((row) => [row.id, row]));
   return html`
     <div class="opense-outline" role="list" aria-label="Model outline">
-      ${rows.map((row) => renderOutlineRow(html, controller, context, state, row, outlineRowDepth(row, rowsById)))}
+      ${rows.map(({ row, depth }) => renderOutlineRow(html, controller, context, state, row, depth))}
     </div>
   `;
 }
@@ -458,18 +443,18 @@ function renderDetail(html: HtmlTemplateTag, controller: OpenseUiController, con
   if (selectedId === undefined) {
     return html`<p class="opense-muted">Select an element in the outline to inspect its details.</p>`;
   }
-  const row = state.report?.outline.find((candidate) => candidate.id === selectedId);
-  // report/index/workspace are always assigned together at the end of a parse
-  // (parse() above), and selectionIn clears dangling selections after
-  // every re-parse, so this branch only fires for a selection that no longer
-  // exists in the current report — "no longer available", never a loading
-  // state that cannot render.
-  if (row === undefined || state.index === undefined || state.workspace === undefined) {
+  const result = state.result;
+  const row = result?.report.outline.find((candidate) => candidate.id === selectedId);
+  // result is always assigned at the end of a parse, and selectionIn clears
+  // dangling selections after every re-parse, so a missing row or result only
+  // fires for a selection that no longer exists in the current report —
+  // "no longer available", never a loading state that cannot render.
+  if (result === undefined || row === undefined) {
     return html`<p class="opense-muted">This element is no longer available. Run Parse again.</p>`;
   }
   // Resolved by exact id, so unnamed elements (synthetic <kind> ids) are
   // addressable here too — they are reached by clicking an owned row below.
-  const details = elementDetails(state.index, state.workspace, row.id);
+  const details = elementDetails(result.index, result.workspace, row.id);
   if (details === undefined) {
     return html`<p class="opense-muted">This element is no longer available. Run Parse again.</p>`;
   }
@@ -536,21 +521,6 @@ function renderOwnedRow(
   `;
 }
 
-/** Nesting depth of one outline row: number of ancestor rows (0 = top level). */
-function outlineRowDepth(row: OutlineRow, rowsById: ReadonlyMap<string, OutlineRow>): number {
-  let depth = 0;
-  let parentId = row.parentId;
-  const seen = new Set<string>();
-  while (parentId !== undefined && !seen.has(parentId)) {
-    seen.add(parentId);
-    depth += 1;
-    const parent = rowsById.get(parentId);
-    if (parent === undefined) break;
-    parentId = parent.parentId;
-  }
-  return depth;
-}
-
 /**
  * Keep `selectedId` only when the row would still be rendered under the
  * current kind filter; the report carries the unfiltered outline.
@@ -562,48 +532,45 @@ function selectionIn(outline: OutlineRow[], filter: Member["kind"] | undefined, 
 }
 
 function defineOpensePanelActivityElement(): void {
-  if (typeof customElements === "undefined" || typeof HTMLElement === "undefined" || customElements.get(activityElementTag) !== undefined) return;
-  class OpensePanelActivityElement extends HTMLElement {
-    private controllerValue: OpenseUiController | undefined;
-    private contextValue: WorkspacePanelContext | undefined;
+  defineCustomElementOnce(activityElementTag, () => {
+    class OpensePanelActivityElement extends HTMLElement {
+      private controllerValue: OpenseUiController | undefined;
+      private contextValue: WorkspacePanelContext | undefined;
 
-    set controller(value: OpenseUiController | undefined) {
-      if (this.controllerValue === value) return;
-      this.controllerValue = value;
-      this.restart();
-    }
+      set controller(value: OpenseUiController | undefined) {
+        if (this.controllerValue === value) return;
+        this.controllerValue = value;
+        this.restart();
+      }
 
-    // Change-guard: re-renders for the same workspace (host.requestRender
-    // loops, tab switches) must not re-kick discovery/parse — only the
-    // workspace identity changes do.
-    set context(value: WorkspacePanelContext | undefined) {
-      const previousKey = this.contextValue === undefined ? undefined : workspaceContextKey(this.contextValue);
-      this.contextValue = value;
-      if (previousKey !== (value === undefined ? undefined : workspaceContextKey(value))) this.restart();
-    }
+      // Change-guard: re-renders for the same workspace (host.requestRender
+      // loops, tab switches) must not re-kick discovery/parse — only the
+      // workspace identity changes do.
+      set context(value: WorkspacePanelContext | undefined) {
+        const previousKey = this.contextValue === undefined ? undefined : workspaceContextKey(this.contextValue);
+        this.contextValue = value;
+        if (previousKey !== (value === undefined ? undefined : workspaceContextKey(value))) this.restart();
+      }
 
-    connectedCallback(): void {
-      this.restart();
-    }
+      connectedCallback(): void {
+        this.restart();
+      }
 
-    disconnectedCallback(): void {
-      if (this.controllerValue !== undefined && this.contextValue !== undefined) this.controllerValue.disconnect(this.contextValue);
-    }
+      disconnectedCallback(): void {
+        if (this.controllerValue !== undefined && this.contextValue !== undefined) this.controllerValue.disconnect(this.contextValue);
+      }
 
-    private restart(): void {
-      if (!this.isConnected || this.controllerValue === undefined || this.contextValue === undefined) return;
-      this.controllerValue.connect(this.contextValue);
+      private restart(): void {
+        if (!this.isConnected || this.controllerValue === undefined || this.contextValue === undefined) return;
+        this.controllerValue.connect(this.contextValue);
+      }
     }
-  }
-  customElements.define(activityElementTag, OpensePanelActivityElement);
+    customElements.define(activityElementTag, OpensePanelActivityElement);
+  });
 }
 
 function workspaceContextKey(context: WorkspacePanelContext): string {
   return JSON.stringify([context.machine.id, context.workspace.projectId, context.workspace.id]);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 const opensePanelStyles = `

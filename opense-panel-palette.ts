@@ -14,6 +14,7 @@
 
 import type { PluginPromptEditor, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { contextPrompt, editPrompt } from "./opense-prompts.js";
+import { defineCustomElementOnce } from "./opense-shared.js";
 
 export const actionPaletteElementTag = "pi-web-opense-action-palette";
 
@@ -152,131 +153,140 @@ const PALETTE_STYLES = `
  * custom element is not defined yet.
  */
 export function defineOpenseActionPaletteElement(): void {
-  if (typeof customElements === "undefined" || typeof HTMLElement === "undefined") return;
-  if (customElements.get(actionPaletteElementTag) !== undefined) return;
-  class OpenseActionPaletteElement extends HTMLElement {
-    private subjectValue: string | undefined;
-    private filepathValue: string | undefined;
-    private contextValue: WorkspacePanelContext | undefined;
-    private editing = false;
-    private shadow: ShadowRoot | undefined;
-    private input: HTMLInputElement | undefined;
+  defineCustomElementOnce(actionPaletteElementTag, () => {
+    class OpenseActionPaletteElement extends HTMLElement {
+      private subjectValue: string | undefined;
+      private filepathValue: string | undefined;
+      private contextValue: WorkspacePanelContext | undefined;
+      private editing = false;
+      private shadow: ShadowRoot | undefined;
+      private input: HTMLInputElement | undefined;
 
-    // lit-html 3.x re-commits object property parts on every render, so these
-    // setters fire even when their value is unchanged. They must stay cheap,
-    // storing the value for the click/keydown handlers below.
-    //
-    // The host reuses the same palette DOM node across element selections, so
-    // a genuinely changed element identity must close an open task input:
-    // otherwise the stale typed text would be submitted against the new
-    // element. Unlike syside's array-valued qualified name, the subject is a
-    // primitive string, so plain value equality is the right guard: a
-    // re-commit of the same element's string keeps the draft, any other
-    // string (new element, synthetic id of an unnamed one) closes it.
-    set subject(value: string | undefined) {
-      if (value !== this.subjectValue) {
-        this.subjectValue = value;
-        this.closeInput();
+      // lit-html 3.x re-commits object property parts on every render, so these
+      // setters fire even when their value is unchanged. They must stay cheap,
+      // storing the value for the click/keydown handlers below.
+      //
+      // The host reuses the same palette DOM node across element selections, so
+      // a genuinely changed element identity must close an open task input:
+      // otherwise the stale typed text would be submitted against the new
+      // element. Unlike syside's array-valued qualified name, the subject is a
+      // primitive string, so plain value equality is the right guard: a
+      // re-commit of the same element's string keeps the draft, any other
+      // string (new element, synthetic id of an unnamed one) closes it.
+      set subject(value: string | undefined) {
+        if (value !== this.subjectValue) {
+          this.subjectValue = value;
+          this.closeInput();
+        }
       }
-    }
 
-    get subject(): string | undefined {
-      return this.subjectValue;
-    }
-
-    set filepath(value: string | undefined) {
-      if (value !== this.filepathValue) {
-        this.filepathValue = value;
-        this.closeInput();
+      get subject(): string | undefined {
+        return this.subjectValue;
       }
-    }
 
-    get filepath(): string | undefined {
-      return this.filepathValue;
-    }
+      set filepath(value: string | undefined) {
+        if (value !== this.filepathValue) {
+          this.filepathValue = value;
+          this.closeInput();
+        }
+      }
 
-    set context(value: WorkspacePanelContext | undefined) {
-      this.contextValue = value;
-    }
+      get filepath(): string | undefined {
+        return this.filepathValue;
+      }
 
-    get context(): WorkspacePanelContext | undefined {
-      return this.contextValue;
-    }
+      set context(value: WorkspacePanelContext | undefined) {
+        this.contextValue = value;
+      }
 
-    connectedCallback(): void {
-      if (this.shadow !== undefined) return;
-      const shadow = this.attachShadow({ mode: "open" });
-      this.shadow = shadow;
-      shadow.innerHTML = `
-        <style>${PALETTE_STYLES}</style>
-        <div class="palette" role="group" aria-label="Element actions">
-          <button type="button" class="palette-copy-name" aria-label="Copy element name">${copyIconSvg}<span>Copy name</span></button>
-          <button type="button" class="palette-investigate" aria-label="Investigate element">${investigateIconSvg}<span>Investigate</span></button>
-          <button type="button" class="palette-task" aria-label="Custom task for element">${taskIconSvg}<span>Task</span></button>
-          <input type="text" class="palette-input" aria-label="Task for element" placeholder="Task for element" />
-        </div>
-      `;
+      get context(): WorkspacePanelContext | undefined {
+        return this.contextValue;
+      }
 
-      const input = shadow.querySelector<HTMLInputElement>(".palette-input");
-      this.input = input ?? undefined;
+      connectedCallback(): void {
+        if (this.shadow !== undefined) return;
+        const shadow = this.attachShadow({ mode: "open" });
+        this.shadow = shadow;
+        shadow.innerHTML = `
+          <style>${PALETTE_STYLES}</style>
+          <div class="palette" role="group" aria-label="Element actions">
+            <button type="button" class="palette-copy-name" aria-label="Copy element name">${copyIconSvg}<span>Copy name</span></button>
+            <button type="button" class="palette-investigate" aria-label="Investigate element">${investigateIconSvg}<span>Investigate</span></button>
+            <button type="button" class="palette-task" aria-label="Custom task for element">${taskIconSvg}<span>Task</span></button>
+            <input type="text" class="palette-input" aria-label="Task for element" placeholder="Task for element" />
+          </div>
+        `;
 
-      // The panel always binds a defined subject; the empty guard keeps a
-      // detached/mis-mounted palette from inserting a broken prompt instead.
-      shadow.querySelector<HTMLButtonElement>(".palette-investigate")?.addEventListener("click", () => {
-        if (this.subjectValue === undefined || this.subjectValue === "") return;
-        insertInvestigatePrompt(this.contextValue?.prompt, this.filepathValue, this.subjectValue);
-      });
+        const input = shadow.querySelector<HTMLInputElement>(".palette-input");
+        this.input = input ?? undefined;
 
-      shadow.querySelector<HTMLButtonElement>(".palette-task")?.addEventListener("click", () => {
-        if (this.editing) {
-          // Reselection with the input already open: refocus and clear so the
-          // user can start a new task.
-          if (this.input !== undefined) {
-            this.input.value = "";
-            this.input.focus();
+        // The panel always binds a defined subject; the shared empty guard keeps
+        // a detached/mis-mounted palette from inserting a broken prompt instead.
+        shadow.querySelector<HTMLButtonElement>(".palette-investigate")?.addEventListener("click", this.withSubject((subject) => {
+          insertInvestigatePrompt(this.contextValue?.prompt, this.filepathValue, subject);
+        }));
+
+        shadow.querySelector<HTMLButtonElement>(".palette-task")?.addEventListener("click", () => {
+          if (this.editing) {
+            // Reselection with the input already open: refocus and clear so the
+            // user can start a new task.
+            if (this.input !== undefined) {
+              this.input.value = "";
+              this.input.focus();
+            }
+            return;
           }
-          return;
-        }
-        this.openInput();
-      });
+          this.openInput();
+        });
 
-      shadow.querySelector<HTMLButtonElement>(".palette-copy-name")?.addEventListener("click", () => {
-        if (this.subjectValue === undefined || this.subjectValue === "") return;
-        insertCopyNamePrompt(this.contextValue?.prompt, this.subjectValue);
-      });
+        shadow.querySelector<HTMLButtonElement>(".palette-copy-name")?.addEventListener("click", this.withSubject((subject) => {
+          insertCopyNamePrompt(this.contextValue?.prompt, subject);
+        }));
 
-      input?.addEventListener("keydown", (e: KeyboardEvent) => {
-        if (e.key === "Enter") {
-          const task = input.value.trim();
-          if (task === "" || this.subjectValue === undefined || this.subjectValue === "") return;
-          insertTaskPrompt(this.contextValue?.prompt, this.filepathValue, this.subjectValue, task);
+        input?.addEventListener("keydown", (e: KeyboardEvent) => {
+          if (e.key === "Enter") {
+            const task = input.value.trim();
+            if (task === "" || this.subjectValue === undefined || this.subjectValue === "") return;
+            insertTaskPrompt(this.contextValue?.prompt, this.filepathValue, this.subjectValue, task);
+            this.closeInput();
+          } else if (e.key === "Escape") {
+            this.closeInput();
+          }
+        });
+
+        input?.addEventListener("blur", (e: FocusEvent) => {
+          const related = e.relatedTarget;
+          if (related instanceof Node && (this.shadow?.contains(related) ?? false)) return;
           this.closeInput();
-        } else if (e.key === "Escape") {
-          this.closeInput();
-        }
-      });
+        });
+      }
 
-      input?.addEventListener("blur", (e: FocusEvent) => {
-        const related = e.relatedTarget;
-        if (related instanceof Node && (this.shadow?.contains(related) ?? false)) return;
-        this.closeInput();
-      });
-    }
+      private openInput(): void {
+        if (this.input === undefined) return;
+        this.editing = true;
+        this.input.value = "";
+        this.input.classList.add("is-visible");
+        this.input.focus();
+      }
 
-    private openInput(): void {
-      if (this.input === undefined) return;
-      this.editing = true;
-      this.input.value = "";
-      this.input.classList.add("is-visible");
-      this.input.focus();
-    }
+      private closeInput(): void {
+        if (this.input === undefined) return;
+        this.editing = false;
+        this.input.value = "";
+        this.input.classList.remove("is-visible");
+      }
 
-    private closeInput(): void {
-      if (this.input === undefined) return;
-      this.editing = false;
-      this.input.value = "";
-      this.input.classList.remove("is-visible");
+      /** Click-handler wrapper sharing the empty-subject guard: the handlers
+       *  for subject-addressing actions (Investigate, Copy name) run only when
+       *  a non-empty subject is bound; the Task handler manages its own input
+       *  state and is wired directly. */
+      private withSubject(run: (subject: string) => void): () => void {
+        return () => {
+          if (this.subjectValue === undefined || this.subjectValue === "") return;
+          run(this.subjectValue);
+        };
+      }
     }
-  }
-  customElements.define(actionPaletteElementTag, OpenseActionPaletteElement);
+    customElements.define(actionPaletteElementTag, OpenseActionPaletteElement);
+  });
 }

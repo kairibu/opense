@@ -43,6 +43,7 @@
 
 import type { SourceFile } from "./vendor/sysml-parser.bundle.js";
 import type { WorkspaceDiagnostic } from "./opense-contract.js";
+import { formatUnknownError } from "./opense-shared.js";
 
 /** Path of the workspace root, matching `context.files.listFiles("")`. */
 const WORKSPACE_ROOT = "";
@@ -270,8 +271,4 @@ function isSysmlFileName(name: string): boolean {
 /** Code-unit string comparison — fully environment-independent ordering. */
 function compareByPath(a: SourceFile, b: SourceFile): number {
   return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-}
-
-function formatUnknownError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

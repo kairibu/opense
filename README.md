@@ -19,10 +19,15 @@ expected to become an installable pi-web plugin package in the future.
   (vanilla custom element: Investigate, Task, and Copy name insert prompts
   into the session prompt editor)
 - `opense-prompts.ts` — pure prompt builders used by the action palette
+- `opense-shared.ts` — tiny cross-module helpers (`formatUnknownError`, the
+  register-once custom-element guard) with no dependencies, so every module
+  can import it without cycles
 - `opense-contract.ts` — the single boundary to the vendored parser: loads
   the bundle, adapts its results to plugin-local shapes
 - `opense-discovery.ts` — workspace file discovery (`*.sysml` sources)
 - `opense-outline.ts` — model outline rows from the parser AST
+- `test-support.ts` — shared test fixtures (in-memory workspace-files fake,
+  entry/tree/content builders); excluded from the runtime build
 - `vendor/sysml-parser.bundle.js` — committed browser bundle of the
   [sysml-parser](https://github.com/kai/sysml-parser) library (generated)
 - `vendor/sysml-parser.bundle.d.ts` — hand-written minimal type surface for

@@ -58,12 +58,7 @@ export interface OpenseWorkspaceReport {
  */
 export function parseOpenseWorkspaceReport(value: unknown): OpenseWorkspaceReport {
   const record = requireRecord(value, "OpenSE workspace report");
-  return {
-    diagnostics: parseWorkspaceDiagnostics(record["diagnostics"]),
-    outline: parseOutlineRows(record["outline"]),
-    ok: requireBoolean(record, "ok"),
-    parsedFileCount: requireFiniteNumber(record, "parsedFileCount"),
-  };
+  return assembleReport(record, parseOutlineRows(record["outline"]), requireFiniteNumber(record, "parsedFileCount"));
 }
 
 /**
@@ -78,16 +73,23 @@ export function openseReportFromWorkspace(workspace: Workspace, outline: Outline
   // (already used by the response guard) additionally guards the runtime
   // shape of a rebuilt bundle: a missing/renamed `ok` or `files` field
   // fails loudly here instead of flowing into the report silently.
-  return parseWorkspaceReport(workspace, outline);
+  const record = requireRecord(workspace, "workspace");
+  return assembleReport(record, outline, requireArrayValue(record["files"], "files").length);
 }
 
-function parseWorkspaceReport(workspace: unknown, outline: OutlineRow[]): OpenseWorkspaceReport {
-  const record = requireRecord(workspace, "workspace");
+/** Shared body of the guard and the adapter: the parts both validate
+ *  identically (diagnostics, ok); only the outline source and the
+ *  parsedFileCount derivation differ, so both come in as arguments. */
+function assembleReport(
+  record: Record<string, unknown>,
+  outline: OutlineRow[],
+  parsedFileCount: number,
+): OpenseWorkspaceReport {
   return {
     diagnostics: parseWorkspaceDiagnostics(record["diagnostics"]),
     outline,
     ok: requireBoolean(record, "ok"),
-    parsedFileCount: requireArrayValue(record["files"], "files").length,
+    parsedFileCount,
   };
 }
 

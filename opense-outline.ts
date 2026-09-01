@@ -48,6 +48,46 @@ export function outlineRows(index: ModelIndex, filter?: ElementFilter): OutlineR
   return index.list(filter).map(toOutlineRow);
 }
 
+/** One named outline row plus its nesting depth (number of ancestors; 0 =
+ *  top level) — everything the outline renderer needs per row. */
+export interface NamedOutlineRow {
+  row: OutlineRow;
+  depth: number;
+}
+
+/**
+ * The outline the panel renders: named rows only, in document (DFS pre-order)
+ * order, each with its nesting depth. Unnamed elements (doc, import,
+ * succession, …) stay out of the list; they surface as owned members in the
+ * detail pane, reachable by clicking.
+ *
+ * Depth is derived from `parentId` chains rather than template recursion.
+ * The id map spans ALL rows (unnamed included) so depths stay correct even if
+ * a nameless container ever sits between two named ones.
+ */
+export function namedOutlineRows(index: ModelIndex, filter?: ElementFilter): NamedOutlineRow[] {
+  const allRows = outlineRows(index, filter);
+  const rowsById = new Map(allRows.map((row) => [row.id, row]));
+  return allRows
+    .filter((row) => row.name !== undefined)
+    .map((row) => ({ row, depth: outlineRowDepth(row, rowsById) }));
+}
+
+/** Nesting depth of one outline row: number of ancestor rows (0 = top level). */
+function outlineRowDepth(row: OutlineRow, rowsById: ReadonlyMap<string, OutlineRow>): number {
+  let depth = 0;
+  let parentId = row.parentId;
+  const seen = new Set<string>();
+  while (parentId !== undefined && !seen.has(parentId)) {
+    seen.add(parentId);
+    depth += 1;
+    const parent = rowsById.get(parentId);
+    if (parent === undefined) break;
+    parentId = parent.parentId;
+  }
+  return depth;
+}
+
 function toOutlineRow(element: ModelElement): OutlineRow {
   const name = element.name;
   const qualifiedName = element.qualifiedName;

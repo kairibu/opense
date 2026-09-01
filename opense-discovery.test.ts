@@ -3,6 +3,7 @@
 // same way the real `context.files` satisfies `OpenseDiscoveryFiles` without
 // importing the host API.
 
+import type { FileContentResponse, FileTreeEntry, FileTreeResponse } from "@jmfederico/pi-web/plugin-api";
 import { describe, expect, it, vi } from "vitest";
 import {
   MAX_CONCURRENT_READS,
@@ -10,11 +11,9 @@ import {
   MAX_DISCOVERY_ENTRIES,
   MAX_DISCOVERY_FILES,
   discoverOpenseFiles,
-  type OpenseDiscoveryFileContent,
   type OpenseDiscoveryFiles,
-  type OpenseDiscoveryFileTree,
-  type OpenseDiscoveryTreeEntry,
 } from "./opense-discovery.js";
+import { createFakeFiles, dirEntry, fileEntry, symlinkEntry, text, tree } from "./test-support.js";
 
 describe("opense discovery", () => {
   it("collects nested .sysml files (case-insensitive), sorted by path, skipping other files and symlinks", async () => {
@@ -70,7 +69,7 @@ describe("opense discovery", () => {
     // MAX_DISCOVERY_ENTRIES skipped directories occupy the whole listing; a
     // real .sysml file then still fits under the cap because skips cost
     // nothing (the cap bounds work actually examined).
-    const entries: OpenseDiscoveryTreeEntry[] = [];
+    const entries: FileTreeEntry[] = [];
     for (let i = 0; i < MAX_DISCOVERY_ENTRIES; i += 1) entries.push(dirEntry(".git", `g${String(i)}`));
     entries.push(fileEntry("model.sysml", "model.sysml"));
 
@@ -92,7 +91,7 @@ describe("opense discovery", () => {
         "": tree([fileEntry("big.sysml", "big.sysml"), fileEntry("ok.sysml", "ok.sysml")]),
       },
       reads: {
-        "big.sysml": { content: "partial prefix only", truncated: true, binary: false },
+        "big.sysml": { ...text("partial prefix only"), truncated: true },
         "ok.sysml": text("package Ok;"),
       },
     });
@@ -111,7 +110,7 @@ describe("opense discovery", () => {
         "": tree([fileEntry("blob.sysml", "blob.sysml"), fileEntry("ok.sysml", "ok.sysml")]),
       },
       reads: {
-        "blob.sysml": { content: "", truncated: false, binary: true },
+        "blob.sysml": { ...text(""), binary: true },
         "ok.sysml": text("package Ok;"),
       },
     });
@@ -182,7 +181,7 @@ describe("opense discovery", () => {
   });
 
   it("stops the whole walk at the entries cap and reports it", async () => {
-    const entries: OpenseDiscoveryTreeEntry[] = [];
+    const entries: FileTreeEntry[] = [];
     for (let i = 0; i < MAX_DISCOVERY_ENTRIES; i += 1) entries.push(fileEntry(`f${String(i)}.txt`, `f${String(i)}.txt`));
     // The 2001st entry would be expanded if the cap did not stop the walk.
     entries.push(dirEntry("beyond", "beyond"));
@@ -201,8 +200,8 @@ describe("opense discovery", () => {
   });
 
   it("stops collecting at the files cap and reports it", async () => {
-    const entries: OpenseDiscoveryTreeEntry[] = [];
-    const reads: Record<string, OpenseDiscoveryFileContent> = {};
+    const entries: FileTreeEntry[] = [];
+    const reads: Record<string, FileContentResponse> = {};
     for (let i = 0; i < MAX_DISCOVERY_FILES + 1; i += 1) {
       const path = `m${String(i).padStart(3, "0")}.sysml`;
       entries.push(fileEntry(path, path));
@@ -221,7 +220,7 @@ describe("opense discovery", () => {
   });
 
   it("stops expanding at the depth cap, still collects files within it, and reports the cap once", async () => {
-    const trees: Record<string, OpenseDiscoveryFileTree> = {
+    const trees: Record<string, FileTreeResponse> = {
       "": tree([dirEntry("d1", "d1"), fileEntry("top.sysml", "top.sysml")]),
     };
     let dirPath = "d1";
@@ -269,7 +268,7 @@ describe("opense discovery", () => {
   });
 
   it("reads collected files with bounded concurrency (at most MAX_CONCURRENT_READS in flight)", async () => {
-    const entries: OpenseDiscoveryTreeEntry[] = [];
+    const entries: FileTreeEntry[] = [];
     for (let i = 0; i < MAX_CONCURRENT_READS * 3; i += 1) {
       const path = `f${String(i).padStart(3, "0")}.sysml`;
       entries.push(fileEntry(path, path));
@@ -393,63 +392,6 @@ describe("opense discovery", () => {
     expect(readCalls).toEqual([]);
   });
 });
-
-// --- in-memory fake adapter -------------------------------------------------
-
-interface FakeFilesOptions {
-  trees?: Record<string, OpenseDiscoveryFileTree>;
-  /** Directory paths whose listFiles rejects with the given error message. */
-  listErrors?: Record<string, string>;
-  /** File paths to result content/flags, or an Error to reject with. */
-  reads?: Record<string, OpenseDiscoveryFileContent | Error>;
-}
-
-function createFakeFiles(options: FakeFilesOptions = {}): {
-  files: OpenseDiscoveryFiles;
-  listCalls: string[];
-  readCalls: string[];
-} {
-  const listCalls: string[] = [];
-  const readCalls: string[] = [];
-  return {
-    files: {
-      listFiles: vi.fn<OpenseDiscoveryFiles["listFiles"]>((path: string) => {
-        listCalls.push(path);
-        const error = options.listErrors?.[path];
-        if (error !== undefined) return Promise.reject(new Error(error));
-        const tree = options.trees?.[path];
-        if (tree === undefined) return Promise.reject(new Error(`Path does not exist: ${path}`));
-        return Promise.resolve(tree);
-      }),
-      readFile: vi.fn<OpenseDiscoveryFiles["readFile"]>((path: string) => {
-        readCalls.push(path);
-        const read = options.reads?.[path];
-        if (read === undefined) return Promise.reject(new Error(`Path does not exist: ${path}`));
-        if (read instanceof Error) return Promise.reject(read);
-        return Promise.resolve(read);
-      }),
-    },
-    listCalls,
-    readCalls,
-  };
-}
-
-function dirEntry(name: string, path: string): OpenseDiscoveryTreeEntry {
-  return { name, path, type: "directory" };
-}
-
-function fileEntry(name: string, path: string): OpenseDiscoveryTreeEntry {
-  return { name, path, type: "file" };
-}
-
-function symlinkEntry(name: string, path: string): OpenseDiscoveryTreeEntry {
-  return { name, path, type: "symlink" };
-}
-
-function tree(entries: OpenseDiscoveryTreeEntry[], truncated = false): OpenseDiscoveryFileTree {
-  return { entries, truncated };
-}
-
-function text(content: string): OpenseDiscoveryFileContent {
-  return { content, truncated: false, binary: false };
-}
+// --- in-memory fake adapter: the shared createFakeFiles + entry/tree/text
+// helpers live in test-support.ts (the fake's full WorkspaceFiles response
+// types satisfy opense-discovery's minimal adapter interfaces structurally).
