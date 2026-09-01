@@ -70,7 +70,9 @@ The parser is a pre-built ESM bundle, committed here under
 
 ## Installation
 
-Symlink this repository into pi-web's plugin
+1. Build the plugin. It will be created in `dist/`.
+
+2. Symlink `dist/` from this repository into pi-web's plugin
 tree (pi-web handles symlinked plugin directories):
 
 ```sh
