@@ -13177,7 +13177,7 @@ var SysmlParser = class extends CstParser {
     this.CONSUME(BlockComment);
   });
   /** A qualified name: `Arcadia::*`, `KerML::FeatureDirectionKind`,
-   *  `'Root Function'.'Capture Movement'`, `system.'Optical Sensor Unit'` */
+   *  `'Root Function'.'Capture Movement'`, `system.'Drive Unit'` */
   qualifiedName = this.RULE("qualifiedName", () => {
     this.CONSUME(NameToken);
     this.MANY(() => {
@@ -13243,9 +13243,9 @@ var SysmlParser = class extends CstParser {
     this.MANY(() => this.SUBRULE(this.metadataProperty));
     this.CONSUME(RBrace);
   });
-  /** `library package CoSMA... { ... }` / `package P { ... }` — the CoSMA
-   *  fixtures use the `library` prefix form only (a PREFIX on the package
-   *  declaration, not a standalone `library X;` member; see INVENTORY.md §1.1). */
+  /** `library package Q { ... }` / `package P { ... }` — the `library`
+   *  prefix form (a PREFIX on the package declaration, not a standalone
+   *  `library X;` member). */
   packageMember = this.RULE("packageMember", () => {
     this.OPTION(() => this.CONSUME(Kw_library));
     this.CONSUME(Kw_package);
@@ -13260,7 +13260,7 @@ var SysmlParser = class extends CstParser {
       { ALT: () => this.CONSUME(Semicolon) }
     ]);
   });
-  /** `occurrence def <SE> OpticalMouseModel { ... }` */
+  /** `occurrence def <SE> SystemModel { ... }` */
   occurrenceMember = this.RULE("occurrenceMember", () => {
     this.CONSUME(Kw_occurrence);
     this.OPTION(() => this.CONSUME(Kw_def));
@@ -13297,8 +13297,8 @@ var SysmlParser = class extends CstParser {
       { ALT: () => this.CONSUME(Semicolon) }
     ]);
   });
-  /** `part def MK1;` / `abstract part def meinSystem { ... }` /
-   *  `part 'mk1_rc1.1' :> ms.mK1 : MK1 { ... }` — optional `abstract`, then an
+  /** `part def Widget;` / `abstract part def System { ... }` /
+   *  `part 'unit-1' :> sys.partA : Widget { ... }` — optional `abstract`, then an
    *  optional `individual` prefix, `def` (definition), short name, name
    *  multiplicity, an optional `: type` / `:> specs` tail (either order, e.g.
    *  `: Capability :> participant`), and a type-level `default` value
@@ -13403,7 +13403,7 @@ var SysmlParser = class extends CstParser {
     ]);
   });
   /** `abstract interface def StagingInterface { end source : StagingPort; … }`
-   *  — the `abstract` prefix form of interfaceDefMember (alexis fixtures).
+   *  — the `abstract` prefix form of interfaceDefMember.
    *  Thin wrapper: consume the prefix, then delegate to the shared rule. */
   abstractInterfaceDefMember = this.RULE("abstractInterfaceDefMember", () => {
     this.CONSUME(Kw_abstract);
@@ -13458,7 +13458,7 @@ var SysmlParser = class extends CstParser {
     this.CONSUME(NameToken);
     this.SUBRULE(this.dependencyMember);
   });
-  /** `requirement <'R1.1'> Optical : ArcadiaRequirement { ... }` /
+  /** `requirement <'R1.1'> Top : SystemRequirement { ... }` /
    *  `requirement def Goal;` (CP:84) / `requirement goals[1..*] : Goal;` /
    *  `requirement needs[*]: StakeholderNeed;` — optional `def`, short name,
    *  name multiplicity, and a `: type` / `:> specs` tail (any order, via the
@@ -13476,7 +13476,7 @@ var SysmlParser = class extends CstParser {
     ]);
     this.OPTION5(() => this.SUBRULE2(this.postBodyTail));
   });
-  /** `subject subject1 : Structure::meinSystem;` — declares which
+  /** `subject subject1 : System::Vehicle;` — declares which
    *  element a requirement is about. */
   subjectMember = this.RULE("subjectMember", () => {
     this.CONSUME(Kw_subject);
@@ -13972,7 +13972,7 @@ var SysmlParser = class extends CstParser {
    *  `abstract connection capabilityToGoals[*] : CapabilityToGoalDerivation;`
    *  (CP:70) — connection definition or usage, sharing the partMember shape
    *  plus an optional gated `connect a to b` clause (checked against the
-   *  inventory: no CoSMA fixture connection uses it, but the interfaceMember
+   *  inventory: no fixture connection uses it, but the interfaceMember
    *  form is mirrored here). Apollo D4/MissionPackage: the NAME is optional
    *  (`connection : CapabilityToGoalDerivation { end capa ::> x; … } :>
    *  capabilityToGoals;`) and a `:> list ;` tail follows the body. */
@@ -15528,7 +15528,7 @@ var DEFAULT_LIBRARY_ROOTS = [
   "ModelingMetadata",
   "SysML",
   "Base",
-  // CoSMA fixture imports (KerML/SysML standard library packages)
+  // KerML/SysML standard library packages commonly imported by models
   "NumericalFunctions",
   "States",
   "ISQ",
