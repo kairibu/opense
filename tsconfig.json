@@ -24,8 +24,8 @@
     ]
   },
   "include": [
-    "*.ts",
-    "vendor/**/*.d.ts",
+    "src/**/*.ts",
+    "src/vendor/**/*.d.ts",
     "vitest.config.ts"
   ]
 }

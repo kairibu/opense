@@ -11,26 +11,28 @@ expected to become an installable pi-web plugin package in the future.
 
 ## Structure
 
-- `pi-web-plugin.ts` — browser entry point; default-exports the
+All sources live under `src/`.
+
+- `src/pi-web-plugin.ts` — browser entry point; default-exports the
   `PiWebPlugin` activation descriptor (apiVersion 2) the host loads
-- `opense-panel.ts` — panel UI and contributions factory (lit custom
+- `src/opense-panel.ts` — panel UI and contributions factory (lit custom
   elements; drives the parse on connect)
-- `opense-panel-palette.ts` — action palette below the element details
+- `src/opense-panel-palette.ts` — action palette below the element details
   (vanilla custom element: Investigate, Task, and Copy name insert prompts
   into the session prompt editor)
-- `opense-prompts.ts` — pure prompt builders used by the action palette
-- `opense-shared.ts` — tiny cross-module helpers (`formatUnknownError`, the
+- `src/opense-prompts.ts` — pure prompt builders used by the action palette
+- `src/opense-shared.ts` — tiny cross-module helpers (`formatUnknownError`, the
   register-once custom-element guard) with no dependencies, so every module
   can import it without cycles
-- `opense-contract.ts` — the single boundary to the vendored parser: loads
+- `src/opense-contract.ts` — the single boundary to the vendored parser: loads
   the bundle, adapts its results to plugin-local shapes
-- `opense-discovery.ts` — workspace file discovery (`*.sysml` sources)
-- `opense-outline.ts` — model outline rows from the parser AST
-- `test-support.ts` — shared test fixtures (in-memory workspace-files fake,
+- `src/opense-discovery.ts` — workspace file discovery (`*.sysml` sources)
+- `src/opense-outline.ts` — model outline rows from the parser AST
+- `src/test-support.ts` — shared test fixtures (in-memory workspace-files fake,
   entry/tree/content builders); excluded from the runtime build
-- `vendor/sysml-parser.bundle.js` — committed browser bundle of the
+- `src/vendor/sysml-parser.bundle.js` — committed browser bundle of the
   [sysml-parser](https://github.com/kai/sysml-parser) library (generated)
-- `vendor/sysml-parser.bundle.d.ts` — hand-written minimal type surface for
+- `src/vendor/sysml-parser.bundle.d.ts` — hand-written minimal type surface for
   what this plugin consumes (NOT generated)
 
 ## The piWeb manifest
@@ -68,20 +70,20 @@ bundle).
 ## The vendored sysml-parser bundle
 
 The in-browser parser is a pre-built ESM bundle, committed here under
-`vendor/`. The sysml-parser repository owns the toolchain: it produces the
+`src/vendor/`. The sysml-parser repository owns the toolchain: it produces the
 artifact with `npm run build:browser`
 (`dist/sysml-parser.browser.js`, provenance banner, bundled chevrotain
 version). To refresh the committed copy:
 
 ```sh
 # in the sysml-parser repo:  npm run build:browser
-cp ../sysml-parser/dist/sysml-parser.browser.js vendor/sysml-parser.bundle.js
+cp ../sysml-parser/dist/sysml-parser.browser.js src/vendor/sysml-parser.bundle.js
 ```
 
 Or, from the pi-web checkout, `npm run vendor:sysml` and copy the vendor
 directory here. The bundle header records its provenance — do not edit it by
 hand. When the parser gains API the plugin should use, also update the
-hand-written `vendor/sysml-parser.bundle.d.ts`.
+hand-written `src/vendor/sysml-parser.bundle.d.ts`.
 
 ## Consuming from pi-web
 

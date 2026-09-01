@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
-// Build the OpenSE pi-web plugin: transpile TypeScript sources to dist/ and
-// copy non-TS assets (package.json manifest, vendor bundle) verbatim.
+// Build the OpenSE pi-web plugin: transpile TypeScript sources from src/ to
+// dist/ and copy non-TS assets (package.json manifest, vendor bundle) verbatim.
 //
 // Adapted from pi-web's scripts/build-plugins.mjs (single build target: this
 // repository IS the plugin root; symlink materialization dropped — no build
@@ -10,8 +10,9 @@
 // materialized through a symlinked plugin directory in the pi-web checkout.
 //
 // Output layout (dist/):
-//   package.json            — verbatim copy; carries the piWeb.plugins
-//                             manifest the pi-web catalog discovers
+//   package.json            — verbatim copy from the repository root; carries
+//                             the piWeb.plugins manifest the pi-web catalog
+//                             discovers
 //   pi-web-plugin.js …      — transpiled sources ("// Generated from …")
 //   vendor/sysml-parser.bundle.js — verbatim copy (committed vendor asset)
 // Test files (*.test.ts), the shared test-support module, and .d.ts
@@ -28,22 +29,13 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const rootDir = resolve(import.meta.dirname, "..");
+const srcDir = resolve(rootDir, "src");
 const outDir = resolve(rootDir, "dist");
 const watchMode = process.argv.includes("--watch");
 const cwd = process.cwd();
 
-/** Root-level project files that never belong into the runtime dist/. */
-const skippedNames = new Set([
-  ".git",
-  ".gitignore",
-  "LICENSE",
-  "README.md",
-  "package-lock.json",
-  "test-support.ts",
-  "tsconfig.json",
-  "vitest.config.ts",
-  "vitest.config.mjs",
-]);
+/** Source-tree files that never belong into the runtime dist/. */
+const skippedNames = new Set(["test-support.ts"]);
 
 if (isDirectExecution()) {
   if (watchMode) {
@@ -55,7 +47,11 @@ if (isDirectExecution()) {
 
 async function buildAll() {
   await rm(outDir, { recursive: true, force: true });
-  const result = await buildDirectory(rootDir, outDir);
+  const result = await buildDirectory(srcDir, outDir);
+  // The plugin manifest lives at the repository root; dist/ needs it verbatim
+  // so the pi-web catalog can discover the piWeb.plugins entry.
+  await mkdir(outDir, { recursive: true });
+  await copyFile(resolve(rootDir, "package.json"), resolve(outDir, "package.json"));
   const suffix = result.transpiled === 1 ? "file" : "files";
   console.log(`[opense] built ${String(result.transpiled)} TypeScript ${suffix} into ${relative(cwd, outDir)}`);
 }
@@ -72,7 +68,7 @@ async function buildDirectory(sourceDir, targetDir) {
   let transpiled = 0;
 
   for (const entry of entries) {
-    if (entry.name === "node_modules" || entry.name === "scripts" || entry.name === "dist" || skippedNames.has(entry.name)) continue;
+    if (entry.name === "node_modules" || skippedNames.has(entry.name)) continue;
     const sourcePath = resolve(sourceDir, entry.name);
     const targetPath = resolve(targetDir, entry.name);
 
@@ -124,8 +120,8 @@ async function buildFile(file, outputPath) {
   await writeFile(outputPath, output);
 }
 
-/** Watch mode listens on the source tree; the realpath guard keeps a
- *  symlinked subdirectory from fanning out duplicate watchers. */
+/** Watch mode listens on src/; the realpath guard keeps a symlinked
+ *  subdirectory from fanning out duplicate watchers. */
 async function findWatchDirs(dir) {
   const dirs = [];
   const visited = new Set();
@@ -196,7 +192,7 @@ async function watchAndBuild() {
 
   const refreshWatchers = async () => {
     closeWatchers();
-    watchers = (await findWatchDirs(rootDir)).map((dir) => watch(dir, () => scheduleBuild()));
+    watchers = (await findWatchDirs(srcDir)).map((dir) => watch(dir, () => scheduleBuild()));
   };
 
   const runBuild = async () => {
