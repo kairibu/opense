@@ -43,6 +43,7 @@ import { guard } from "lit/directives/guard.js";
 import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
 import { property } from "lit/decorators.js";
+import { buttonBase, microLabel, pill, truncate } from "./opense-styles.js";
 import type { Member } from "./vendor/sysml-parser.bundle.js";
 import type { OutlineRow, WorkspaceDiagnostic } from "./opense-contract.js";
 import { elementDetails, namedOutlineKinds, namedOutlineRows, type OpenseElementDetails, type OpenseOwnedElement } from "./opense-outline.js";
@@ -121,7 +122,9 @@ function defineOpensePanelActivityElement(): void {
       @property({ attribute: false })
       reportOk: boolean | undefined;
 
-      static override styles = css`
+      static override styles = [
+        pill,
+        css`
         :host {
           display: block;
         }
@@ -134,19 +137,15 @@ function defineOpensePanelActivityElement(): void {
           padding: 6px 8px 0;
         }
 
+        /* pill fragment supplies radius/padding/font-size; only the color
+           story differs per chip. */
         .opense-stale {
           border: 1px solid var(--pi-warning-border);
-          border-radius: 999px;
           color: var(--pi-warning);
-          padding: 1px 6px;
-          font-size: 12px;
         }
 
         .opense-status {
           border: 1px solid var(--pi-border);
-          border-radius: 999px;
-          padding: 1px 6px;
-          font-size: 12px;
         }
 
         .opense-status.ok {
@@ -166,7 +165,8 @@ function defineOpensePanelActivityElement(): void {
           color: var(--pi-danger);
           padding: 8px;
         }
-      `;
+      `,
+      ];
 
       override connectedCallback(): void {
         super.connectedCallback();
@@ -262,7 +262,12 @@ function defineOpensePanelBodyElement(): void {
       @property({ attribute: false })
       kindFilter: Member["kind"] | undefined;
 
-      static override styles = css`
+      static override styles = [
+        buttonBase,
+        pill,
+        microLabel,
+        truncate,
+        css`
         /* The body element IS the panel root the pi-web host sizes; :host
            takes the pre-refactor .opense-panel's flex-item role (the host
            chrome styles its flex children, and --pi-* custom properties
@@ -278,16 +283,13 @@ function defineOpensePanelBodyElement(): void {
           font: 13px system-ui, sans-serif;
         }
 
+        /* buttonBase supplies the shared core; these four are the body's
+           deliberate variation (the palette picks different values). */
         button {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          border: 1px solid var(--pi-border);
           border-radius: 7px;
           background: var(--pi-surface);
           color: var(--pi-text);
           padding: 5px 7px;
-          cursor: pointer;
         }
 
         button:disabled {
@@ -402,7 +404,6 @@ function defineOpensePanelBodyElement(): void {
 
         .opense-severity {
           flex: 0 0 auto;
-          border-radius: 999px;
           padding: 0 6px;
           font-size: 11px;
           font-weight: 600;
@@ -439,9 +440,7 @@ function defineOpensePanelBodyElement(): void {
         }
 
         .opense-kind-button {
-          border-radius: 999px;
           padding: 2px 9px;
-          font-size: 12px;
         }
 
         .opense-kind-button.is-selected {
@@ -456,6 +455,9 @@ function defineOpensePanelBodyElement(): void {
           gap: 1px;
         }
 
+        /* One row base for outline rows AND owned-element rows (the owned
+           variant adds a third column + baseline alignment via .owned);
+           the --depth indent defaults to 0 for owned rows. */
         .opense-row {
           display: grid;
           grid-template-columns: max-content minmax(0, 1fr);
@@ -468,23 +470,22 @@ function defineOpensePanelBodyElement(): void {
           padding: 4px 6px 4px calc(6px + var(--depth, 0) * 14px);
         }
 
+        .opense-row.owned {
+          grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1.2fr);
+          align-items: baseline;
+        }
+
         .opense-row:hover,
         .opense-row.is-selected {
           background: var(--pi-selection-bg);
         }
 
         .opense-row .opense-kind {
-          color: var(--pi-muted);
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
+          ${microLabel}
         }
 
         .opense-row .opense-row-name {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          ${truncate}
         }
 
         .opense-row .opense-row-name.opense-unnamed {
@@ -512,15 +513,11 @@ function defineOpensePanelBodyElement(): void {
         .opense-detail-head h3 {
           margin: 0;
           font-size: 15px;
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          ${truncate}
         }
 
         .opense-kind-badge {
           border: 1px solid var(--pi-accent-border);
-          border-radius: 999px;
           color: var(--pi-accent);
           padding: 1px 8px;
           font-size: 11px;
@@ -570,53 +567,11 @@ function defineOpensePanelBodyElement(): void {
 
         .opense-owned h4 {
           margin: 0 0 4px;
-          color: var(--pi-muted);
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-        }
-
-        .opense-owned-row {
-          display: grid;
-          grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1.2fr);
-          gap: 7px;
-          align-items: baseline;
-          border: 0;
-          border-radius: 5px;
-          background: transparent;
-          text-align: left;
-          padding: 4px 6px;
-          width: 100%;
-        }
-
-        .opense-owned-row:hover {
-          background: var(--pi-selection-bg);
-        }
-
-        .opense-owned-row .opense-kind {
-          color: var(--pi-muted);
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-        }
-
-        .opense-owned-row .opense-row-name {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .opense-owned-row .opense-row-name.opense-unnamed {
-          color: var(--pi-muted);
-          font-style: italic;
+          ${microLabel}
         }
 
         .opense-owned-preview {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          ${truncate}
           color: var(--pi-muted);
           font-size: 12px;
         }
@@ -632,7 +587,8 @@ function defineOpensePanelBodyElement(): void {
         .opense-empty p {
           margin: 0;
         }
-      `;
+      `,
+      ];
 
       protected override render(): TemplateResult {
         return html`
@@ -836,7 +792,7 @@ function defineOpensePanelBodyElement(): void {
         return html`
           <button
             type="button"
-            class="opense-owned-row"
+            class="opense-row owned"
             data-id=${owned.id}
             @click=${() => { this.controller?.selectRow(owned.id); }}
           >

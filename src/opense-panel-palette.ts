@@ -19,6 +19,7 @@ import { classMap } from "lit/directives/class-map.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { property, state } from "lit/decorators.js";
 import { contextPrompt, editPrompt } from "./opense-prompts.js";
+import { buttonBase } from "./opense-styles.js";
 import { defineCustomElementOnce } from "./opense-shared.js";
 
 export const actionPaletteElementTag = "pi-web-opense-action-palette";
@@ -134,7 +135,9 @@ export function defineOpenseActionPaletteElement(): void {
        *  uncontrolled (typed by the user, cleared by open/close). */
       private inputRef = createRef<HTMLInputElement>();
 
-      static override styles = css`
+      static override styles = [
+        buttonBase,
+        css`
         :host {
           display: block;
         }
@@ -146,16 +149,13 @@ export function defineOpenseActionPaletteElement(): void {
           gap: 6px;
         }
 
+        /* buttonBase supplies the shared core; these four are the palette's
+           deliberate variation (the body's buttons pick different values). */
         .palette button {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          background: var(--pi-surface-hover);
-          border: 1px solid var(--pi-border);
           border-radius: 6px;
-          padding: 4px 8px;
-          cursor: pointer;
+          background: var(--pi-surface-hover);
           color: var(--pi-text-secondary);
+          padding: 4px 8px;
         }
 
         .palette button:hover {
@@ -181,7 +181,8 @@ export function defineOpenseActionPaletteElement(): void {
         .palette-input::placeholder {
           color: var(--pi-dim);
         }
-      `;
+      `,
+      ];
 
       protected override willUpdate(changedProperties: PropertyValues<this>): void {
         // The host reuses the same palette DOM node across element

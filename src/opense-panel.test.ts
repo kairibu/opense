@@ -282,7 +282,7 @@ describe("bundled OpenSE browser plugin", () => {
 
     // Clicking the owned doc row navigates to the doc's own details (by id),
     // where its full text renders as a curated field.
-    const docRow = owned.querySelector<HTMLButtonElement>(".opense-owned-row");
+    const docRow = owned.querySelector<HTMLButtonElement>(".opense-row.owned");
     if (docRow === null) throw new Error("Expected an owned row");
     expect(docRow.dataset["id"]).toBe("Tracker::'needs focus'::<doc>");
     docRow.click();
