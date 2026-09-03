@@ -1,6 +1,8 @@
 // ---------------------------------------------------------------------------
-// OpenSE workspace panel: contributions, per-workspace UI-state controller,
-// in-browser parse job, and the change-guarded activity element.
+// OpenSE workspace panel: contributions, the per-workspace controller
+// registry (plan §6.1 — one `OpenseWorkspaceController` per workspace, handed
+// to consumers via properties), the in-browser parse job, and the
+// change-guarded activity element.
 //
 // Browser-only adaptation of the git panel's controller/activity idiom
 // (pi-web-plugins/git/browser/git-panel.ts): what git does as a
@@ -46,8 +48,9 @@ import { openseReportFromWorkspace } from "./opense-contract.js";
 import type { OpenseDiscoveryFiles } from "./opense-discovery.js";
 import { discoverOpenseFiles } from "./opense-discovery.js";
 import { elementDetails, namedOutlineKinds, namedOutlineRows, outlineRows, type OpenseElementDetails, type OpenseOwnedElement } from "./opense-outline.js";
-import { defineCustomElementOnce, formatUnknownError } from "./opense-shared.js";
+import { defineCustomElementOnce } from "./opense-shared.js";
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
+import { OpenseWorkspaceController, type OpenseWorkspaceHost } from "./opense-panel-controller.js";
 
 const OPENSE_PANEL_LOCAL_ID = "workspace.opense";
 // Keep parse state for a few recent workspaces so reports survive panel
@@ -60,27 +63,9 @@ const activityElementTag = "pi-web-opense-panel-activity";
  *  inaccessible (the discovery diagnostics above narrate which). */
 const EMPTY_WORKSPACE_MESSAGE = "no parseable `.sysml` files found in this workspace";
 
-/** Per-workspace UI state: one entry of the controller's LRU map. */
-interface OpenseWorkspaceUiState {
-  context: WorkspacePanelContext;
-  /** False once the LRU evicts the workspace; late async writes are skipped. */
-  retained: boolean;
-  /** Parse result (report + index + workspace); undefined until the first parse.
-   *  The three fields are always assigned together at the end of a parse. */
-  result: OpenseParseResult | undefined;
-  loading: boolean;
-  error: string | undefined;
-  /** Set on onInvalidate; cleared when a fresh parse lands. */
-  stale: boolean;
-  /** Outline row id selected for the element-detail pane. */
-  selectedId: string | undefined;
-  /** Active kind filter; undefined = all kinds. */
-  kindFilter: Member["kind"] | undefined;
-  /** In-flight parse job; re-entrant calls reuse it (no overlapping jobs). */
-  parseRequest: Promise<void> | undefined;
-}
-
-/** One parse job's full result: the report plus the objects detail views need. */
+/** One parse job's full result: the report plus the objects detail views need.
+ *  The controller (opense-panel-controller.ts) consumes this type-only, so the
+ *  parse job and its result stay in this module (§3.2: parse code untouched). */
 export interface OpenseParseResult {
   report: OpenseWorkspaceReport;
   index: ModelIndex;
@@ -128,136 +113,78 @@ export function createOpenseBrowserContributions(
   svg: SvgTemplateTag,
 ): PluginContributions {
   const panelId = `${runtimePluginId}:${OPENSE_PANEL_LOCAL_ID}`;
-  const controller = new OpenseUiController();
+  const registry = new OpenseWorkspaceRegistry();
   defineOpensePanelActivityElement();
   defineOpenseActionPaletteElement();
   return {
     actions: createOpenseActions(panelId),
-    workspacePanels: [createOpensePanel(html, svg, controller)],
+    workspacePanels: [createOpensePanel(html, svg, registry)],
   };
 }
 
-class OpenseUiController {
-  private readonly states = new Map<string, OpenseWorkspaceUiState>();
-  private activeWorkspaceKey: string | undefined;
-  private connectedWorkspaceKey: string | undefined;
+/**
+ * Per-workspace controller registry (plan §6.1 default: the panel module
+ * keeps the per-workspace controller map and hands instances to consumers —
+ * the activity element, the render functions — via properties; no Context
+ * provider). Rendering a workspace refreshes its controller's context/files
+ * handle and moves it to the LRU tail; past `OPENSE_WORKSPACE_STATE_LIMIT`
+ * the oldest workspace is evicted (never the live panel — it is always the
+ * tail) and its controller released, so late async writes are dropped (§3.2)
+ * and its model index (heaviest field) is garbage-collected. Controllers keep
+ * reports for a few recent workspaces so they survive panel switches without
+ * re-parsing. */
+class OpenseWorkspaceRegistry {
+  private readonly workspaces = new Map<string, OpenseWorkspaceController>();
 
-  state(context: WorkspacePanelContext): OpenseWorkspaceUiState {
-    return this.stateFor(context);
-  }
-
-  connect(context: WorkspacePanelContext): void {
+  /** Get-or-create the controller for a workspace (the render entry point). */
+  for(context: WorkspacePanelContext): OpenseWorkspaceController {
     const key = workspaceContextKey(context);
-    const state = this.stateFor(context);
-    this.activeWorkspaceKey = key;
-    this.connectedWorkspaceKey = key;
-    // Kick the first parse on connect. Later parses reuse the in-flight job
-    // through the parseRequest guard, so overlapping jobs never run.
-    if (state.result === undefined && state.parseRequest === undefined) void this.parse(context);
-  }
-
-  disconnect(context: WorkspacePanelContext): void {
-    if (this.connectedWorkspaceKey === workspaceContextKey(context)) this.connectedWorkspaceKey = undefined;
+    const existing = this.workspaces.get(key);
+    if (existing !== undefined) {
+      // Refresh the controller's CURRENT context handle and move to the LRU
+      // tail (most recent) — mirrors the pre-refactor stateFor refresh. One
+      // handle feeds both parse reads (`context.files`) and the render path
+      // (`context.host.requestRender`), so the refreshed snapshot reaches
+      // both.
+      existing.context = context;
+      this.workspaces.delete(key);
+      this.workspaces.set(key, existing);
+      return existing;
+    }
+    this.evictOldest();
+    const controller = new OpenseWorkspaceController(new OpensePanelHost(), context, parseOpenseWorkspace);
+    this.workspaces.set(key, controller);
+    return controller;
   }
 
   /** Panel invalidation: re-run discovery + parse unconditionally for the
    *  connected workspace (browser-only plugin — no owned-workspace gate). */
   invalidate(context: WorkspacePanelContext): Promise<void> {
-    const state = this.stateFor(context);
-    state.stale = state.result !== undefined;
-    this.requestRender(state);
-    return this.parse(context);
+    return this.for(context).invalidate();
   }
 
-  parse(context: WorkspacePanelContext): Promise<void> {
-    const state = this.stateFor(context);
-    // The infinite-retry guard: re-entrant parses (Parse button spam,
-    // invalidate during a run, workspace switch-back) join the running job
-    // instead of stacking new ones.
-    if (state.parseRequest !== undefined) return state.parseRequest;
-    state.loading = true;
-    state.error = undefined;
-    this.requestRender(state);
-
-    const request = parseOpenseWorkspace(context.files)
-      .then((result) => {
-        if (!state.retained) return;
-        // The outline renders named rows only, so the kind filter is built
-        // from the named kinds (an all-unnamed kind could never match).
-        const kinds = namedOutlineKinds(result.index);
-        if (state.kindFilter !== undefined && !kinds.includes(state.kindFilter)) state.kindFilter = undefined;
-        state.result = result;
-        state.stale = false;
-        state.error = undefined;
-        // A re-parse may drop the selected element (file removed/edited);
-        // clear the dangling selection the same way git clears vanished files.
-        state.selectedId = selectionIn(result.report.outline, state.kindFilter, state.selectedId);
-      })
-      .catch((error: unknown) => {
-        if (state.retained) state.error = formatUnknownError(error);
-      })
-      .finally(() => {
-        if (state.parseRequest !== request) return;
-        state.parseRequest = undefined;
-        state.loading = false;
-        this.requestRender(state);
-      });
-    state.parseRequest = request;
-    return request;
-  }
-
-  selectRow(context: WorkspacePanelContext, rowId: string): void {
-    const state = this.stateFor(context);
-    state.selectedId = rowId;
-    this.requestRender(state);
-  }
-
-  setKindFilter(context: WorkspacePanelContext, kind: Member["kind"] | undefined): void {
-    const state = this.stateFor(context);
-    state.kindFilter = kind;
-    // A filtered-out selection would leave a dangling detail pane; drop it.
-    if (state.result !== undefined) state.selectedId = selectionIn(state.result.report.outline, state.kindFilter, state.selectedId);
-    this.requestRender(state);
-  }
-
-  private stateFor(context: WorkspacePanelContext): OpenseWorkspaceUiState {
-    const key = workspaceContextKey(context);
-    const existing = this.states.get(key);
-    if (existing !== undefined) {
-      // Refresh the host handle and move to the LRU tail (most recent).
-      existing.context = context;
-      this.states.delete(key);
-      this.states.set(key, existing);
-      return existing;
-    }
-    this.evictOldestState();
-    const created: OpenseWorkspaceUiState = {
-      context,
-      retained: true,
-      result: undefined,
-      loading: false,
-      error: undefined,
-      stale: false,
-      selectedId: undefined,
-      kindFilter: undefined,
-      parseRequest: undefined,
-    };
-    this.states.set(key, created);
-    return created;
-  }
-
-  private evictOldestState(): void {
-    if (this.states.size < OPENSE_WORKSPACE_STATE_LIMIT) return;
-    const key = [...this.states.keys()].find((candidate) => candidate !== this.connectedWorkspaceKey) ?? this.states.keys().next().value;
+  private evictOldest(): void {
+    if (this.workspaces.size < OPENSE_WORKSPACE_STATE_LIMIT) return;
+    // Strictly oldest-first: the connected workspace is always the LRU tail —
+    // every panel render of it calls for(), which bumps it — so the head is
+    // never the live panel. The pre-refactor "skip the connected workspace"
+    // preference had the same outcome (connect() also bumped it to the tail).
+    const key = this.workspaces.keys().next().value;
     if (key === undefined) return;
-    const state = this.states.get(key);
-    if (state !== undefined) state.retained = false;
-    this.states.delete(key);
+    const controller = this.workspaces.get(key);
+    if (controller !== undefined) controller.release();
+    this.workspaces.delete(key);
   }
+}
 
-  private requestRender(state: OpenseWorkspaceUiState): void {
-    if (state.retained) state.context.host.requestRender();
-  }
+/** Host adapter for one workspace's controller: carries the connection flag
+ *  the controller's late-async-write guards read (§3.2). The controller
+ *  raises/lowers the flag from its own hostConnected/hostDisconnected/
+ *  release lifecycle, so the adapter itself is a plain mutable state holder
+ *  and holds no context — render routing goes through the controller's
+ *  refreshed `context.host.requestRender()` instead. */
+class OpensePanelHost implements OpenseWorkspaceHost {
+  isConnected = false;
 }
 
 function createOpenseActions(panelId: string): PluginAction[] {
@@ -292,7 +219,7 @@ function createOpenseActions(panelId: string): PluginAction[] {
 function createOpensePanel(
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
-  controller: OpenseUiController,
+  registry: OpenseWorkspaceRegistry,
 ): WorkspacePanelContribution {
   return {
     id: OPENSE_PANEL_LOCAL_ID,
@@ -307,54 +234,54 @@ function createOpensePanel(
     // Browser-only plugins own no workspace provider, so the panel is always
     // visible; the discovery-based empty state carries the "no files" story.
     visible: () => true,
-    onInvalidate: (context) => controller.invalidate(context),
-    render: (context) => renderOpensePanel(html, controller, context),
+    onInvalidate: (context) => registry.invalidate(context),
+    render: (context) => renderOpensePanel(html, registry, context),
   };
 }
 
-function renderOpensePanel(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext) {
-  const state = controller.state(context);
+function renderOpensePanel(html: HtmlTemplateTag, registry: OpenseWorkspaceRegistry, context: WorkspacePanelContext) {
+  const controller = registry.for(context);
   return html`
     <section class="opense-panel">
       <style .textContent=${opensePanelStyles}></style>
       <pi-web-opense-panel-activity .controller=${controller} .context=${context}></pi-web-opense-panel-activity>
       <section class="opense-toolbar">
         <strong>OpenSE</strong>
-        ${state.stale ? html`<span class="opense-stale">stale</span>` : null}
+        ${controller.stale ? html`<span class="opense-stale">stale</span>` : null}
         <div class="opense-toolbar-actions">
-          ${state.result === undefined ? null : html`<span class=${state.result.report.ok ? "opense-status ok" : "opense-status issues"}>${state.result.report.ok ? "ok" : "issues"}</span>`}
-          <button type="button" ?disabled=${state.loading} @click=${() => { void controller.parse(context); }}>Parse</button>
+          ${controller.result === undefined ? null : html`<span class=${controller.result.report.ok ? "opense-status ok" : "opense-status issues"}>${controller.result.report.ok ? "ok" : "issues"}</span>`}
+          <button type="button" ?disabled=${controller.loading} @click=${() => { void controller.parse(); }}>Parse</button>
         </div>
       </section>
-      ${state.error === undefined ? null : html`<div class="opense-error" role="alert">${state.error}</div>`}
+      ${controller.error === undefined ? null : html`<div class="opense-error" role="alert">${controller.error}</div>`}
       <section class="opense-body">
-        ${renderOpenseBody(html, controller, context, state)}
+        ${renderOpenseBody(html, controller, context)}
       </section>
     </section>
   `;
 }
 
-function renderOpenseBody(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const report = state.result?.report;
+function renderOpenseBody(html: HtmlTemplateTag, controller: OpenseWorkspaceController, context: WorkspacePanelContext) {
+  const report = controller.result?.report;
   if (report === undefined) {
-    return html`<p class="opense-muted opense-standalone">${state.loading ? "Parsing workspace…" : "Run Parse to build the model outline."}</p>`;
+    return html`<p class="opense-muted opense-standalone">${controller.loading ? "Parsing workspace…" : "Run Parse to build the model outline."}</p>`;
   }
   return html`
     <section class="opense-split">
       <section class="opense-left">
-        ${renderDiagnostics(html, state)}
-        ${renderKindFilter(html, controller, context, state)}
-        ${renderOutline(html, controller, context, state)}
+        ${renderDiagnostics(html, controller)}
+        ${renderKindFilter(html, controller)}
+        ${renderOutline(html, controller)}
       </section>
       <section class="opense-right">
-        ${renderDetail(html, controller, context, state)}
+        ${renderDetail(html, controller, context)}
       </section>
     </section>
   `;
 }
 
-function renderDiagnostics(html: HtmlTemplateTag, state: OpenseWorkspaceUiState) {
-  const diagnostics = state.result?.report.diagnostics;
+function renderDiagnostics(html: HtmlTemplateTag, controller: OpenseWorkspaceController) {
+  const diagnostics = controller.result?.report.diagnostics;
   if (diagnostics === undefined || diagnostics.length === 0) return null;
   return html`
     <section class="opense-diagnostics" aria-label="Diagnostics">
@@ -375,62 +302,58 @@ function renderDiagnostic(html: HtmlTemplateTag, diagnostic: WorkspaceDiagnostic
   `;
 }
 
-function renderKindFilter(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const index = state.result?.index;
+function renderKindFilter(html: HtmlTemplateTag, controller: OpenseWorkspaceController) {
+  const index = controller.result?.index;
   if (index === undefined) return null;
   const kinds = namedOutlineKinds(index);
   if (kinds.length === 0) return null;
   return html`
     <div class="opense-kinds" role="group" aria-label="Element kinds">
-      ${renderKindButton(html, controller, context, state, undefined, `All (${String(kinds.length)})`)}
-      ${kinds.map((kind) => renderKindButton(html, controller, context, state, kind, kind))}
+      ${renderKindButton(html, controller, undefined, `All (${String(kinds.length)})`)}
+      ${kinds.map((kind) => renderKindButton(html, controller, kind, kind))}
     </div>
   `;
 }
 
 function renderKindButton(
   html: HtmlTemplateTag,
-  controller: OpenseUiController,
-  context: WorkspacePanelContext,
-  state: OpenseWorkspaceUiState,
+  controller: OpenseWorkspaceController,
   kind: Member["kind"] | undefined,
   label: string,
 ) {
-  const selected = state.kindFilter === kind;
+  const selected = controller.kindFilter === kind;
   return html`
-    <button type="button" class=${selected ? "opense-kind-button is-selected" : "opense-kind-button"} aria-pressed=${String(selected)} @click=${() => { controller.setKindFilter(context, kind); }}>${label}</button>
+    <button type="button" class=${selected ? "opense-kind-button is-selected" : "opense-kind-button"} aria-pressed=${String(selected)} @click=${() => { controller.setKindFilter(kind); }}>${label}</button>
   `;
 }
 
-function renderOutline(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const result = state.result;
+function renderOutline(html: HtmlTemplateTag, controller: OpenseWorkspaceController) {
+  const result = controller.result;
   if (result === undefined) return null;
   if (result.report.parsedFileCount === 0) {
     return html`<section class="opense-empty"><p>${EMPTY_WORKSPACE_MESSAGE}</p></section>`;
   }
-  const filter = state.kindFilter === undefined ? undefined : { kind: state.kindFilter };
+  const filter = controller.kindFilter === undefined ? undefined : { kind: controller.kindFilter };
   const rows = namedOutlineRows(result.index, filter);
   if (rows.length === 0) {
-    return html`<p class="opense-muted">No ${state.kindFilter ?? "elements"} in the parsed model.</p>`;
+    return html`<p class="opense-muted">No ${controller.kindFilter ?? "elements"} in the parsed model.</p>`;
   }
   return html`
     <div class="opense-outline" role="list" aria-label="Model outline">
-      ${rows.map(({ row, depth }) => renderOutlineRow(html, controller, context, state, row, depth))}
+      ${rows.map(({ row, depth }) => renderOutlineRow(html, controller, row, depth))}
     </div>
   `;
 }
 
 function renderOutlineRow(
   html: HtmlTemplateTag,
-  controller: OpenseUiController,
-  context: WorkspacePanelContext,
-  state: OpenseWorkspaceUiState,
+  controller: OpenseWorkspaceController,
   row: OutlineRow,
   depth: number,
 ) {
-  const selected = state.selectedId === row.id;
+  const selected = controller.selectedId === row.id;
   return html`
-    <button type="button" class=${selected ? "opense-row is-selected" : "opense-row"} style=${`--depth:${String(depth)}`} data-id=${row.id} @click=${() => { controller.selectRow(context, row.id); }}>
+    <button type="button" class=${selected ? "opense-row is-selected" : "opense-row"} style=${`--depth:${String(depth)}`} data-id=${row.id} @click=${() => { controller.selectRow(row.id); }}>
       ${row.name === undefined
         ? html`<span class="opense-row-name opense-unnamed">${row.kind}</span>`
         : html`<span class="opense-kind">${row.kind}</span><span class="opense-row-name">${row.name}</span>`}
@@ -438,12 +361,12 @@ function renderOutlineRow(
   `;
 }
 
-function renderDetail(html: HtmlTemplateTag, controller: OpenseUiController, context: WorkspacePanelContext, state: OpenseWorkspaceUiState) {
-  const selectedId = state.selectedId;
+function renderDetail(html: HtmlTemplateTag, controller: OpenseWorkspaceController, context: WorkspacePanelContext) {
+  const selectedId = controller.selectedId;
   if (selectedId === undefined) {
     return html`<p class="opense-muted">Select an element in the outline to inspect its details.</p>`;
   }
-  const result = state.result;
+  const result = controller.result;
   const row = result?.report.outline.find((candidate) => candidate.id === selectedId);
   // result is always assigned at the end of a parse, and selectionIn clears
   // dangling selections after every re-parse, so a missing row or result only
@@ -474,7 +397,7 @@ function renderDetail(html: HtmlTemplateTag, controller: OpenseUiController, con
 
 function renderElementDetails(
   html: HtmlTemplateTag,
-  controller: OpenseUiController,
+  controller: OpenseWorkspaceController,
   context: WorkspacePanelContext,
   details: OpenseElementDetails,
 ) {
@@ -495,7 +418,7 @@ function renderElementDetails(
       ${details.owned.length === 0 ? null : html`
         <section class="opense-owned" aria-label="Owned elements">
           <h4>Owned elements</h4>
-          ${details.owned.map((owned) => renderOwnedRow(html, controller, context, owned))}
+          ${details.owned.map((owned) => renderOwnedRow(html, controller, owned))}
         </section>
       `}
     </section>
@@ -505,13 +428,12 @@ function renderElementDetails(
 /** One owned (direct child) element; clicking navigates to its details. */
 function renderOwnedRow(
   html: HtmlTemplateTag,
-  controller: OpenseUiController,
-  context: WorkspacePanelContext,
+  controller: OpenseWorkspaceController,
   owned: OpenseOwnedElement,
 ) {
   return html`
     <button type="button" class="opense-owned-row" data-id=${owned.id}
-      @click=${() => { controller.selectRow(context, owned.id); }}>
+      @click=${() => { controller.selectRow(owned.id); }}>
       <span class="opense-kind">${owned.kind}</span>
       <span class=${owned.name === undefined ? "opense-row-name opense-unnamed" : "opense-row-name"}>
         ${owned.name ?? owned.syntheticLabel}
@@ -521,23 +443,13 @@ function renderOwnedRow(
   `;
 }
 
-/**
- * Keep `selectedId` only when the row would still be rendered under the
- * current kind filter; the report carries the unfiltered outline.
- */
-function selectionIn(outline: OutlineRow[], filter: Member["kind"] | undefined, selectedId: string | undefined): string | undefined {
-  if (selectedId === undefined) return undefined;
-  const visible = filter === undefined ? outline : outline.filter((row) => row.kind === filter);
-  return visible.some((row) => row.id === selectedId) ? selectedId : undefined;
-}
-
 function defineOpensePanelActivityElement(): void {
   defineCustomElementOnce(activityElementTag, () => {
     class OpensePanelActivityElement extends HTMLElement {
-      private controllerValue: OpenseUiController | undefined;
+      private controllerValue: OpenseWorkspaceController | undefined;
       private contextValue: WorkspacePanelContext | undefined;
 
-      set controller(value: OpenseUiController | undefined) {
+      set controller(value: OpenseWorkspaceController | undefined) {
         if (this.controllerValue === value) return;
         this.controllerValue = value;
         this.restart();
@@ -545,7 +457,10 @@ function defineOpensePanelActivityElement(): void {
 
       // Change-guard: re-renders for the same workspace (host.requestRender
       // loops, tab switches) must not re-kick discovery/parse — only the
-      // workspace identity changes do.
+      // workspace identity changes do. With per-workspace controllers the
+      // `.controller` swap already restarts; the context key guard keeps the
+      // element quiet when the host hands out a fresh context object for the
+      // same workspace.
       set context(value: WorkspacePanelContext | undefined) {
         const previousKey = this.contextValue === undefined ? undefined : workspaceContextKey(this.contextValue);
         this.contextValue = value;
@@ -557,12 +472,12 @@ function defineOpensePanelActivityElement(): void {
       }
 
       disconnectedCallback(): void {
-        if (this.controllerValue !== undefined && this.contextValue !== undefined) this.controllerValue.disconnect(this.contextValue);
+        this.controllerValue?.hostDisconnected();
       }
 
       private restart(): void {
         if (!this.isConnected || this.controllerValue === undefined || this.contextValue === undefined) return;
-        this.controllerValue.connect(this.contextValue);
+        this.controllerValue.hostConnected();
       }
     }
     customElements.define(activityElementTag, OpensePanelActivityElement);

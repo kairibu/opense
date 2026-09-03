@@ -1,6 +1,7 @@
 # Plan: Refactor OpenSE to Lit Elements
 
-Status: draft · Build enablement complete, refactor not started.
+Status: draft · Build enablement, palette Lit conversion, and controller
+formalization complete; activity/body elements and styles not started.
 
 ## 1. Goal
 
@@ -50,9 +51,10 @@ Promote `OpenseWorkspaceUiState` + the controller's LRU map into a formal
 
 - Controller holds parse result, `loading`, `stale`, `error`, selection,
   kind filter, and the in-flight `parseRequest` reuse logic.
-- State mutations call `host.requestUpdate()` — the hand-rolled
-  "did state change, re-render the right region" plumbing in the current
-  controller is deleted.
+- State mutations call the host's `requestRender` on the workspace's
+  current context handle (`this.context.host.requestRender()`, gated on the
+  connection flag); the hand-rolled "did state change, re-render the right
+  region" plumbing in the current controller is deleted.
 - `retained`/late-async-write guarding becomes `if (!host.isConnected) return;`
   after `await` points, plus the existing LRU eviction release.
 - One controller instance per workspace, shared by activity/body elements
@@ -112,14 +114,40 @@ Smallest surface, proves the toolchain end to end.
   static string (no functional change).
 - Update `opense-panel-palette.test.ts` (see §5).
 
-### Phase 2 — controller formalization
+### Phase 2 — controller formalization ✅ (done)
 
 - Extract `OpenseWorkspaceUiState` + LRU into `ReactiveController`
   (`opense-panel-controller.ts`); panel module imports it, no behavior change.
 - Parse job, discovery, contract code untouched — they are already
   framework-free.
-- Unit-test the controller with a fake host (`{requestUpdate, isConnected}`),
-  no DOM required.
+- Unit-test the controller with a fake host (`{isConnected}` — the
+  late-async-write guard flag only), asserting render notifications on the
+  context host's `requestRender`; no DOM required.
+
+Done notes: `OpenseWorkspaceController` holds parse result, loading/stale/
+error, selection, kind filter, and the in-flight `parseRequest` reuse guard;
+state mutations call `this.context.host.requestRender()` on the CURRENT
+context handle (refreshed by the registry on workspace reuse, like the
+pre-refactor `state.context` refresh), gated on `host.isConnected`. `retained`
+guarding became `if (!host.isConnected) return;` after each `await`, with
+`release()` on LRU eviction. The host surface is just `{isConnected}` — a
+pure flag holder, NOT structurally satisfied by a LitElement (the controller
+writes the flag; a real LitElement's `isConnected` getter is read-only). The
+panel module keeps the per-workspace controller map (`OpenseWorkspaceRegistry`,
+§6.1 default) and hands instances to the activity element and render
+functions via properties — no Context provider. The parse job is injected
+into the controller constructor (type-only import from the panel module) so
+the new module has no runtime dependency on it; discovery, contract, and
+outline modules were not modified.
+
+Known behavior change vs. the pre-refactor `retained` flag (deliberate, §3.2):
+`hostDisconnected()` now drops late writes (`retained` stayed true on
+unmount), so a parse that *finishes* while the workspace panel is unmounted
+discards its report and re-runs the whole discovery+parse on reconnect — one
+extra full parse per reconnect-after-mid-parse-unmount, not a regression.
+Same for `invalidate()` fired before a workspace panel was ever rendered
+(the registry creates the controller with `isConnected = false`; the result
+is dropped).
 
 ### Phase 3 — activity + body elements
 
