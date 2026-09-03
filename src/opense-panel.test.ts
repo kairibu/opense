@@ -165,6 +165,9 @@ describe("bundled OpenSE browser plugin", () => {
     expect(detail.compareDocumentPosition(palette) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(palette.subject).toBe("Tracker::Parts::lens");
     expect(palette.filepath).toBe("model/good.sysml");
+    // The palette is a LitElement: its first render happens in a microtask
+    // after connect, so the shadow DOM buttons exist only after updateComplete.
+    await palette.updateComplete;
     palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-copy-name")?.click();
     expect(insertText).toHaveBeenCalledWith("Tracker::Parts::lens");
     palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-investigate")?.click();

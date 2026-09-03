@@ -11,7 +11,11 @@
   },
   "piWeb": {
     "plugins": [
-      { "id": "opense", "browserRoot": ".", "module": "pi-web-plugin.js" }
+      {
+        "id": "opense",
+        "browserRoot": ".",
+        "module": "pi-web-plugin.js"
+      }
     ]
   },
   "files": [
@@ -33,6 +37,7 @@
   "devDependencies": {
     "@jmfederico/pi-web": "^1.202608.2",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.27.7",
     "happy-dom": "^20.11.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

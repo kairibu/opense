@@ -4,6 +4,11 @@
 // palette test (pi-web-plugins/syside/browser/syside-panel-palette.test.ts):
 // real mount + interaction over the shadow root, insertions asserted through
 // a fake WorkspacePanelContext prompt editor.
+//
+// The palette is a LitElement, so its reactive updates are async-batched:
+// every assertion on `editing`-derived DOM (the task input's `is-visible`
+// class) must follow `await el.updateComplete` after the event or property
+// change that scheduled it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
@@ -55,17 +60,19 @@ function makeContext(insertText?: (text: string) => void): WorkspacePanelContext
   };
 }
 
-function mountPalette(
+async function mountPalette(
   subject: string | undefined,
   filepath: string | undefined,
   context: WorkspacePanelContext,
-): OpenseActionPaletteElement {
+): Promise<OpenseActionPaletteElement> {
   defineOpenseActionPaletteElement();
   const el = document.createElement(actionPaletteElementTag);
   el.subject = subject;
   el.filepath = filepath;
   el.context = context;
   document.body.appendChild(el);
+  // First render is a microtask after connect; wait for the shadow DOM.
+  await el.updateComplete;
   return el;
 }
 
@@ -86,9 +93,9 @@ afterEach(() => {
 });
 
 describe("OpenseActionPalette", () => {
-  it("inserts the fixed investigation prompt on Investigate click", () => {
+  it("inserts the fixed investigation prompt on Investigate click", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
 
     paletteButton(el, "palette-investigate").click();
 
@@ -97,9 +104,9 @@ describe("OpenseActionPalette", () => {
     );
   });
 
-  it("omits the location clause when no declaring file is bound", () => {
+  it("omits the location clause when no declaring file is bound", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", undefined, makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", undefined, makeContext(insertText));
 
     paletteButton(el, "palette-investigate").click();
 
@@ -108,9 +115,9 @@ describe("OpenseActionPalette", () => {
     );
   });
 
-  it("inserts the subject on Copy name click", () => {
+  it("inserts the subject on Copy name click", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
 
     paletteButton(el, "palette-copy-name").click();
 
@@ -118,24 +125,27 @@ describe("OpenseActionPalette", () => {
     expect(insertText).toHaveBeenCalledWith("Tracker::Parts::lens");
   });
 
-  it("reveals the task input on Task click without inserting", () => {
+  it("reveals the task input on Task click without inserting", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
 
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     expect(insertText).not.toHaveBeenCalled();
     expect(taskInput(el).classList.contains("is-visible")).toBe(true);
   });
 
-  it("Enter inserts the edit prompt and hides the input", () => {
+  it("Enter inserts the edit prompt and hides the input", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "Add validation";
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await el.updateComplete;
 
     expect(insertText).toHaveBeenCalledWith(
       'Perform task "Add validation" for element Tracker::Parts::lens. The element is located in model/good.sysml',
@@ -143,10 +153,11 @@ describe("OpenseActionPalette", () => {
     expect(input.classList.contains("is-visible")).toBe(false);
   });
 
-  it("does not insert for an empty or whitespace task on Enter", () => {
+  it("does not insert for an empty or whitespace task on Enter", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "   ";
@@ -156,42 +167,47 @@ describe("OpenseActionPalette", () => {
     expect(input.classList.contains("is-visible")).toBe(true);
   });
 
-  it("Escape hides the input without inserting", () => {
+  it("Escape hides the input without inserting", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "Discard me";
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await el.updateComplete;
 
     expect(insertText).not.toHaveBeenCalled();
     expect(input.classList.contains("is-visible")).toBe(false);
   });
 
-  it("blur hides the input without inserting", () => {
+  it("blur hides the input without inserting", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "Discard me";
     input.dispatchEvent(new FocusEvent("blur"));
+    await el.updateComplete;
 
     expect(insertText).not.toHaveBeenCalled();
     expect(input.classList.contains("is-visible")).toBe(false);
   });
 
-  it("keeps the input open when focus moves to Investigate and inserts on click", () => {
+  it("keeps the input open when focus moves to Investigate and inserts on click", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     const investigate = paletteButton(el, "palette-investigate");
     // Focus moving to the sibling Investigate button (inside the shadow root)
     // must not blur-close the open input — the blur handler returns early when
-    // the new focus target is still contained by the shadow root.
+    // the new focus target is still contained by the render root.
     input.dispatchEvent(new FocusEvent("blur", { relatedTarget: investigate }));
 
     expect(input.classList.contains("is-visible")).toBe(true);
@@ -200,10 +216,11 @@ describe("OpenseActionPalette", () => {
     expect(input.classList.contains("is-visible")).toBe(true);
   });
 
-  it("keeps the input open when focus moves to Copy name and inserts on click", () => {
+  it("keeps the input open when focus moves to Copy name and inserts on click", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     const copyName = paletteButton(el, "palette-copy-name");
@@ -218,10 +235,11 @@ describe("OpenseActionPalette", () => {
     expect(input.classList.contains("is-visible")).toBe(true);
   });
 
-  it("reselecting Task with the input open clears and refocuses it", () => {
+  it("reselecting Task with the input open clears and refocuses it", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "Stale task";
@@ -232,10 +250,11 @@ describe("OpenseActionPalette", () => {
     expect(insertText).not.toHaveBeenCalled();
   });
 
-  it("closes the open task input when the element changes", () => {
+  it("closes the open task input when the element changes", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
     const input = taskInput(el);
     input.value = "Stale task";
     expect(input.classList.contains("is-visible")).toBe(true);
@@ -244,35 +263,40 @@ describe("OpenseActionPalette", () => {
     // subject must drop the stale draft so it is never submitted against the
     // new element. (String value equality is the identity guard here.)
     el.subject = "Tracker::Parts::aperture";
+    await el.updateComplete;
 
     expect(input.classList.contains("is-visible")).toBe(false);
     expect(input.value).toBe("");
   });
 
-  it("closes the open task input when switching to an unnamed element's synthetic id", () => {
+  it("closes the open task input when switching to an unnamed element's synthetic id", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::'needs focus'", "model.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::'needs focus'", "model.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
 
     const input = taskInput(el);
     input.value = "Stale task";
     // The unnamed doc's synthetic index id is a different string, so the
     // draft must not survive the selection change.
     el.subject = "Tracker::'needs focus'::<doc>";
+    await el.updateComplete;
 
     expect(input.classList.contains("is-visible")).toBe(false);
     expect(input.value).toBe("");
   });
 
-  it("keeps the open task input when the same element is re-committed", () => {
+  it("keeps the open task input when the same element is re-committed", async () => {
     const insertText = vi.fn();
-    const el = mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
+    const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
+    await el.updateComplete;
     const input = taskInput(el);
     input.value = "Keep me";
 
-    // lit-html re-commits property parts on every render. The subject is a
-    // primitive string, so the equal re-commit keeps the open draft.
+    // lit-html re-commits property parts on every render; Lit's hasChanged
+    // compares with Object.is. The subject is a primitive string, so the
+    // equal re-commit keeps the open draft (no update is even scheduled).
     el.subject = "Tracker::Parts::lens";
     el.filepath = "model/good.sysml";
 
@@ -280,9 +304,9 @@ describe("OpenseActionPalette", () => {
     expect(input.value).toBe("Keep me");
   });
 
-  it("re-registers only once and no-ops its buttons without a subject", () => {
+  it("re-registers only once and no-ops its buttons without a subject", async () => {
     const insertText = vi.fn();
-    const el = mountPalette(undefined, undefined, makeContext(insertText));
+    const el = await mountPalette(undefined, undefined, makeContext(insertText));
 
     // A detached/mis-mounted palette must not insert broken prompts.
     paletteButton(el, "palette-investigate").click();
