@@ -9,9 +9,6 @@
 // so plugin modules may import npm dependencies (e.g. `lit`) directly: they
 // are inlined into the bundle and no host import map is required. This script
 // applies the identical esbuild options to this repository's single entry.
-// (The previous revision transpiled per-file with ts.transpileModule, which
-// kept bare imports unresolved — the reason opense-panel-palette.ts had to
-// stay purely imperative.)
 //
 // Output layout (dist/):
 //   package.json            — verbatim copy from the repository root; carries

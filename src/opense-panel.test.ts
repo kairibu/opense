@@ -3,11 +3,19 @@
 // Layer 4 (component boundary): OpenSE workspace panel. Real render +
 // interaction through the custom-element/property contract, exactly the git
 // panel harness shape (pi-web-plugins/git/pi-web-plugin.test.ts): the
-// activity element is connected via document.body, so controller.connect
-// drives the first parse; host.requestRender is a noop, so tests re-render
-// manually after settling. The parse job runs against a fake files adapter,
-// so the whole discovery→loadModel→index→report chain is proven in one
-// render test with no backend anywhere.
+// activity element is connected via the body element's shadow root, so
+// controller hostConnected drives the first parse; host.requestRender is a
+// noop, so tests re-render manually after settling. The parse job runs
+// against a fake files adapter, so the whole discovery→loadModel→index→report
+// chain is proven in one render test with no backend anywhere.
+//
+// Phase 3: the panel UI lives in shadow roots now (plan §3.4), so every
+// content assertion resolves the rendered elements through
+// `pi-web-opense-panel-body`/`pi-web-opense-panel-activity` shadowRoot (the
+// light DOM only carries the body element itself). Lit's async-batched
+// reactive updates mean every mutation is followed by awaiting the elements'
+// updateComplete before asserting (plan §5) — `renderPanel` below does that
+// for the host-render contract the panel drive shares.
 
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +27,12 @@ import type {
 } from "@jmfederico/pi-web/plugin-api";
 import { createOpenseBrowserContributions } from "./opense-panel.js";
 import type { OpenseActionPaletteElement } from "./opense-panel-palette.js";
+import {
+  activityElementTag,
+  bodyElementTag,
+  type OpensePanelActivityElement,
+  type OpensePanelBodyElement,
+} from "./opense-panel-elements.js";
 import {
   createFakeFiles,
   dirEntry,
@@ -100,21 +114,24 @@ describe("bundled OpenSE browser plugin", () => {
 
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
+    // The parse landed during the previous settle; re-render mirrors the new
+    // controller state into the elements (host.requestRender is a noop here).
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
 
     // Toolbar with the Parse (not "Check"/"Validate") button.
-    const parseButton = button(container, "Parse");
+    const parseButton = button(root, "Parse");
     expect(parseButton.disabled).toBe(false);
 
     // Summary badge (report.ok, plan §3.4): the discovery read failure and
-    // the parser lexer error make the combined report fail → "issues".
-    expect(container.querySelector(".opense-status.issues")?.textContent).toBe("issues");
+    // the parser lexer error make the combined report fail → "issues". The
+    // strip lives in the activity element's shadow root.
+    expect(activityShadow(container)?.querySelector(".opense-status.issues")?.textContent).toBe("issues");
 
     // Discovery diagnostic (read failure) first, then the parser's own
     // pre-formatted lexer diagnostic with its path and line:col message.
-    const diagnostics = [...container.querySelectorAll(".opense-diagnostic")].map((entry) => entry.textContent);
+    const diagnostics = [...root.querySelectorAll(".opense-diagnostic")].map((entry) => entry.textContent);
     // textContent is always a string on DOM nodes; the cast keeps the map callback uniform.
     expect(diagnostics[0]).toContain("error");
     expect(diagnostics[0]).toContain("model/unreadable.sysml");
@@ -126,23 +143,23 @@ describe("bundled OpenSE browser plugin", () => {
     expect(diagnostics[1]).toContain("Parser error");
 
     // Merged model outline: nesting via indentation, kind labels on rows.
-    expect(button(container, "Tracker").textContent).toContain("package");
-    const partsRow = button(container, "Parts");
+    expect(button(root, "Tracker").textContent).toContain("package");
+    const partsRow = button(root, "Parts");
     expect(partsRow.getAttribute("style")).toContain("--depth:1");
-    expect(button(container, "lens").getAttribute("style")).toContain("--depth:2");
-    expect(container.querySelector(".opense-outline")).not.toBeNull();
+    expect(button(root, "lens").getAttribute("style")).toContain("--depth:2");
+    expect(root.querySelector(".opense-outline")).not.toBeNull();
 
     // Vertical layout split: the element list pane must precede the details
     // pane in DOM order (regression guard for the horizontal-vs-vertical axis
     // swap, mirroring the syside panel test pattern).
-    const list = container.querySelector(".opense-left");
-    const details = container.querySelector(".opense-right");
+    const list = root.querySelector(".opense-left");
+    const details = root.querySelector(".opense-right");
     expect(list && details && (list.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
 
     // Element-detail pane after selecting the lens part.
-    button(container, "lens").click();
-    render(panel.render(context), container);
-    const detail = container.querySelector<HTMLElement>(".opense-detail");
+    button(root, "lens").click();
+    await renderPanel(panel, context, container);
+    const detail = root.querySelector<HTMLElement>(".opense-detail");
     if (detail === null) throw new Error("Expected the element-detail pane");
     expect(detail.textContent).toContain("part");
     expect(detail.querySelector("h3")?.textContent).toBe("lens");
@@ -156,7 +173,7 @@ describe("bundled OpenSE browser plugin", () => {
     // a sibling of the detail section, bound to the selected element's
     // subject and declaring file; Investigate inserts the fixed
     // investigation prompt into the prompt editor.
-    const right = container.querySelector<HTMLElement>(".opense-right");
+    const right = root.querySelector<HTMLElement>(".opense-right");
     if (right === null) throw new Error("Expected the details pane");
     const palette = right.querySelector<OpenseActionPaletteElement>("pi-web-opense-action-palette");
     if (palette === null) throw new Error("Expected the action palette below the element details");
@@ -166,7 +183,8 @@ describe("bundled OpenSE browser plugin", () => {
     expect(palette.subject).toBe("Tracker::Parts::lens");
     expect(palette.filepath).toBe("model/good.sysml");
     // The palette is a LitElement: its first render happens in a microtask
-    // after connect, so the shadow DOM buttons exist only after updateComplete.
+    // after connect, so the shadow DOM buttons exist only after updateComplete
+    // (renderPanel awaited it, but they are still fresh commits).
     await palette.updateComplete;
     palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-copy-name")?.click();
     expect(insertText).toHaveBeenCalledWith("Tracker::Parts::lens");
@@ -180,7 +198,7 @@ describe("bundled OpenSE browser plugin", () => {
     expect(files.listCalls).toEqual(["", "model"]);
     parseButton.click();
     await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
     expect(files.listCalls).toHaveLength(4);
     await panel.onInvalidate?.(context);
     expect(files.listCalls).toHaveLength(6);
@@ -201,31 +219,31 @@ describe("bundled OpenSE browser plugin", () => {
     const context = panelContext(files);
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
 
-    const kindsRow = container.querySelector<HTMLElement>(".opense-kinds");
+    const kindsRow = root.querySelector<HTMLElement>(".opense-kinds");
     if (kindsRow === null) throw new Error("Expected the kind filter row");
     expect(kindsRow.textContent).toContain("All (2)");
     expect(kindsRow.textContent).toContain("package");
     expect(kindsRow.textContent).toContain("part");
 
-    button(container, "Tracker").click();
-    render(panel.render(context), container);
-    expect(container.querySelector(".opense-detail")?.textContent).toContain("Tracker");
+    button(root, "Tracker").click();
+    await renderPanel(panel, context, container);
+    expect(root.querySelector(".opense-detail")?.textContent).toContain("Tracker");
 
-    button(container, "part").click();
-    render(panel.render(context), container);
+    button(root, "part").click();
+    await renderPanel(panel, context, container);
     // Package rows are filtered out; the selected package cleared accordingly.
-    expect(findButton(container, "Tracker")).toBeUndefined();
-    expect(findButton(container, "Parts")).toBeUndefined();
-    expect(button(container, "lens")).toBeDefined();
-    expect(container.textContent).toContain("Select an element in the outline to inspect its details.");
+    expect(findButton(root, "Tracker")).toBeUndefined();
+    expect(findButton(root, "Parts")).toBeUndefined();
+    expect(button(root, "lens")).toBeDefined();
+    expect(root.textContent).toContain("Select an element in the outline to inspect its details.");
 
-    button(container, "lens").click();
-    render(panel.render(context), container);
-    expect(container.querySelector(".opense-detail")?.textContent).toContain("Tracker::Parts::lens");
+    button(root, "lens").click();
+    await renderPanel(panel, context, container);
+    expect(root.querySelector(".opense-detail")?.textContent).toContain("Tracker::Parts::lens");
 
     render(null, container);
   });
@@ -243,21 +261,21 @@ describe("bundled OpenSE browser plugin", () => {
     const context = panelContext(files);
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
 
     // The outline lists named rows only: no italic "doc" row for the
     // requirement's unnamed documentation.
-    expect(button(container, "Tracker")).toBeDefined();
-    expect(button(container, "needs focus")).toBeDefined();
-    expect(button(container, "lens")).toBeDefined();
-    expect(findButton(container, "doc")).toBeUndefined();
+    expect(button(root, "Tracker")).toBeDefined();
+    expect(button(root, "needs focus")).toBeDefined();
+    expect(button(root, "lens")).toBeDefined();
+    expect(findButton(root, "doc")).toBeUndefined();
 
     // The requirement's detail pane surfaces its owned doc with a preview.
-    button(container, "needs focus").click();
-    render(panel.render(context), container);
-    const owned = container.querySelector(".opense-owned");
+    button(root, "needs focus").click();
+    await renderPanel(panel, context, container);
+    const owned = root.querySelector(".opense-owned");
     if (owned === null) throw new Error("Expected the owned-elements section");
     expect(owned.textContent).toContain("doc");
     expect(owned.textContent).toContain("must focus");
@@ -268,8 +286,8 @@ describe("bundled OpenSE browser plugin", () => {
     if (docRow === null) throw new Error("Expected an owned row");
     expect(docRow.dataset["id"]).toBe("Tracker::'needs focus'::<doc>");
     docRow.click();
-    render(panel.render(context), container);
-    const detail = container.querySelector<HTMLElement>(".opense-detail");
+    await renderPanel(panel, context, container);
+    const detail = root.querySelector<HTMLElement>(".opense-detail");
     if (detail === null) throw new Error("Expected the doc detail pane");
     expect(detail.querySelector("h3")?.textContent).toBe("Tracker::'needs focus'::<doc>");
     expect(detail.textContent).toContain("must focus");
@@ -289,14 +307,14 @@ describe("bundled OpenSE browser plugin", () => {
     const context = panelContext(files);
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
 
-    expect(container.querySelector(".opense-empty")?.textContent).toContain("no parseable `.sysml` files found in this workspace");
-    expect(container.querySelector(".opense-outline")).toBeNull();
-    expect(container.querySelector(".opense-kinds")).toBeNull();
-    expect([...container.querySelectorAll(".opense-diagnostic")]).toHaveLength(0);
+    expect(root.querySelector(".opense-empty")?.textContent).toContain("no parseable `.sysml` files found in this workspace");
+    expect(root.querySelector(".opense-outline")).toBeNull();
+    expect(root.querySelector(".opense-kinds")).toBeNull();
+    expect([...root.querySelectorAll(".opense-diagnostic")]).toHaveLength(0);
 
     render(null, container);
   });
@@ -315,25 +333,26 @@ describe("bundled OpenSE browser plugin", () => {
     const context = panelContext(files);
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
 
-    // The read is still pending: loading state with the Parse button disabled.
-    expect(container.textContent).toContain("Parsing workspace…");
-    expect(button(container, "Parse").disabled).toBe(true);
-    // No report yet → no summary badge either.
-    expect(container.querySelector(".opense-status")).toBeNull();
+    // The read is still pending: loading state with the Parse button disabled
+    // and the loading empty-state text in the body region.
+    expect(root.textContent).toContain("Parsing workspace…");
+    expect(button(root, "Parse").disabled).toBe(true);
+    // No report yet → no summary badge either (empty strip).
+    expect(root.querySelector(".opense-status")).toBeNull();
 
     resolveRead?.(text("package Lonely;"));
     await settle();
-    render(panel.render(context), container);
+    await renderPanel(panel, context, container);
 
-    expect(container.textContent).not.toContain("Parsing workspace…");
-    expect(button(container, "Lonely")).toBeDefined();
-    expect(button(container, "Parse").disabled).toBe(false);
+    expect(root.textContent).not.toContain("Parsing workspace…");
+    expect(button(root, "Lonely")).toBeDefined();
+    expect(button(root, "Parse").disabled).toBe(false);
     // A clean parse flips the summary badge (report.ok, plan §3.4) to "ok".
-    expect(container.querySelector(".opense-status.ok")?.textContent).toBe("ok");
+    expect(activityShadow(container)?.querySelector(".opense-status.ok")?.textContent).toBe("ok");
 
     render(null, container);
   });
@@ -352,23 +371,20 @@ describe("bundled OpenSE browser plugin", () => {
     document.body.append(container);
 
     const alphaContext = panelContext(alphaFiles, openseWorkspace);
-    render(panel.render(alphaContext), container);
-    await settle();
-    render(panel.render(alphaContext), container);
-    expect(button(container, "Alpha")).toBeDefined();
+    await renderPanel(panel, alphaContext, container);
+    await renderPanel(panel, alphaContext, container);
+    expect(button(bodyShadow(container), "Alpha")).toBeDefined();
 
     const betaContext = panelContext(betaFiles, { ...openseWorkspace, id: "workspace-2" });
-    render(panel.render(betaContext), container);
-    await settle();
-    render(panel.render(betaContext), container);
-    expect(button(container, "Beta")).toBeDefined();
-    expect(findButton(container, "Alpha")).toBeUndefined();
+    await renderPanel(panel, betaContext, container);
+    await renderPanel(panel, betaContext, container);
+    expect(button(bodyShadow(container), "Beta")).toBeDefined();
+    expect(findButton(bodyShadow(container), "Alpha")).toBeUndefined();
 
     // Switching back to the alpha workspace reuses its cached report; the
-    // change-guarded activity element does not re-kick discovery.
-    render(panel.render(alphaContext), container);
-    await settle();
-    expect(button(container, "Alpha")).toBeDefined();
+    // activity element's controller swap does not re-kick discovery.
+    await renderPanel(panel, alphaContext, container);
+    expect(button(bodyShadow(container), "Alpha")).toBeDefined();
     expect(alphaFiles.listCalls).toHaveLength(1);
     expect(betaFiles.listCalls).toHaveLength(1);
 
@@ -384,18 +400,17 @@ describe("bundled OpenSE browser plugin", () => {
     const context = panelContext(files);
     const container = document.createElement("div");
     document.body.append(container);
-    render(panel.render(context), container);
-    await settle();
-    render(panel.render(context), container);
-    expect(container.querySelector(".opense-stale")).toBeNull();
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    expect(activityShadow(container)?.querySelector(".opense-stale")).toBeNull();
 
     const pending = panel.onInvalidate?.(context);
-    render(panel.render(context), container);
-    expect(container.querySelector(".opense-stale")?.textContent).toBe("stale");
+    await renderPanel(panel, context, container);
+    expect(activityShadow(container)?.querySelector(".opense-stale")?.textContent).toBe("stale");
 
     await pending;
-    render(panel.render(context), container);
-    expect(container.querySelector(".opense-stale")).toBeNull();
+    await renderPanel(panel, context, container);
+    expect(activityShadow(container)?.querySelector(".opense-stale")).toBeNull();
 
     render(null, container);
   });
@@ -405,6 +420,45 @@ function requiredPanel(contributions: ReturnType<typeof createOpenseBrowserContr
   const panel = contributions.workspacePanels?.[0];
   if (panel === undefined) throw new Error("Expected OpenSE workspace panel");
   return panel;
+}
+
+/** Host-contract render step: render the panel template and let every
+ *  involved element flush its Lit updates (plan §5 — `updateComplete`).
+ *  `host.requestRender` is a noop in tests, so each controller mutation is
+ *  followed by another render step that re-mirrors the controller state. */
+async function renderPanel(
+  panel: ReturnType<typeof requiredPanel>,
+  context: WorkspacePanelContext,
+  container: HTMLElement,
+): Promise<void> {
+  render(panel.render(context), container);
+  await panelSettled(container);
+}
+
+/** Let microtasks flush (parse kicks happen inside the body element's first
+ *  shadow render) and await the body/activity/palette updateCompletes. */
+async function panelSettled(container: ParentNode): Promise<void> {
+  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+  const body = container.querySelector(bodyElementTag) as OpensePanelBodyElement | null;
+  await body?.updateComplete;
+  const activity = body?.shadowRoot?.querySelector(activityElementTag) as OpensePanelActivityElement | null;
+  await activity?.updateComplete;
+  const palette = body?.shadowRoot?.querySelector("pi-web-opense-action-palette") as OpenseActionPaletteElement | null;
+  await palette?.updateComplete;
+  // Shadow updates scheduled by the commits above flush here.
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
+}
+
+function bodyShadow(container: ParentNode): ShadowRoot {
+  const body = container.querySelector(bodyElementTag);
+  if (body === null) throw new Error("Expected the OpenSE panel body element");
+  if (body.shadowRoot === null) throw new Error("Expected the panel body shadow root");
+  return body.shadowRoot;
+}
+
+function activityShadow(container: ParentNode): ShadowRoot | null {
+  const body = container.querySelector(bodyElementTag) as OpensePanelBodyElement | null;
+  return body?.shadowRoot?.querySelector(activityElementTag)?.shadowRoot ?? null;
 }
 
 function panelContext(
