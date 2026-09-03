@@ -5,22 +5,47 @@ parses SysML v2 models found in the workspace and renders diagnostics, a
 model outline, and element details — entirely in the browser, no backend or
 semantic validation.
 
-## Structure
+## Prerequisites
+
+this plugin is based on 
+- [Pi Coding Agent](https://pi.dev)
+- and [PI WEB](https://pi-web.dev/)
+
+And it works best with the skills and tools from [bulb](https://github.com/kairibu/bulb) installed, however they require `syside`, a commercial sysml v2 tool by [sensmetry](https://www.sensmetry.com).
+
+[Pi](https://pi.dev) is lightweight and saves context and tools and skills are kept simple to support on-prem, local AI models. It has been tested with Qwen3.6 and gpt-oss-120.
+
+## Installation
+
+1. Build the plugin. It will be created in `dist/`.
+
+2. Symlink `dist/` from this repository into pi-web's plugin
+tree (pi-web handles symlinked plugin directories):
+
+```sh
+ln -s ./dist ~/.pi-web/plugins/opense
+```
+
+pi-web then discovers and serves the plugin.
+
+## Development
+
+### Structure
 
 All sources live under `src/`.
 
 - `src/pi-web-plugin.ts` — browser entry point; default-exports the
-  `PiWebPlugin` activation descriptor (apiVersion 2) the host loads
+  `PiWebPlugin` activation descriptor (apiVersion 2)
 - `src/opense-panel.ts` — panel UI and contributions factory (lit custom
   elements; drives the parse on connect)
 - `src/opense-panel-palette.ts` — action palette below the element details
-  (vanilla custom element: Investigate, Task, and Copy name insert prompts
+  (custom element: Investigate, Task, and Copy name insert prompts
   into the session prompt editor)
 - `src/opense-prompts.ts` — pure prompt builders used by the action palette
 - `src/opense-shared.ts` — tiny cross-module helpers (`formatUnknownError`, the
   register-once custom-element guard) with no dependencies, so every module
   can import it without cycles
-- `src/opense-contract.ts` — the single boundary to the vendored parser: loads
+- `src/opense-contract.ts` — the single boundary to the vendored sysml-parser: loads
   the bundle, adapts its results to plugin-local shapes
 - `src/opense-discovery.ts` — workspace file discovery (`*.sysml` sources)
 - `src/opense-outline.ts` — model outline rows from the parser AST
@@ -31,7 +56,7 @@ All sources live under `src/`.
 - `src/vendor/sysml-parser.bundle.d.ts` — hand-written minimal type surface for
   what this plugin consumes (NOT generated)
 
-## The piWeb manifest
+### The piWeb manifest
 
 `package.json` carries the plugin manifest for the pi-web catalog:
 
@@ -46,7 +71,7 @@ All sources live under `src/`.
 The id `opense` must stay in sync with the directory name pi-web knows the
 plugin under.
 
-## Build and development
+### NPM build and development
 
 ```sh
 npm install
@@ -63,20 +88,7 @@ directory. Test files and `.d.ts` declarations are excluded from `dist/`
 (types are checked by `typecheck`; the plugin loads only the runtime
 bundle).
 
-## The vendored sysml-parser bundle
+### The vendored sysml-parser bundle
 
 The parser is a pre-built ESM bundle, committed here under
 `src/vendor/`. The sysml-parser is a separate repository.
-
-## Installation
-
-1. Build the plugin. It will be created in `dist/`.
-
-2. Symlink `dist/` from this repository into pi-web's plugin
-tree (pi-web handles symlinked plugin directories):
-
-```sh
-ln -s ./dist ~/.pi-web/plugins/opense
-```
-
-pi-web then discovers and serves the plugin.
