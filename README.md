@@ -17,9 +17,15 @@ And it works best with the skills and tools from [bulb](https://github.com/kairi
 
 ## Installation
 
-1. Build the plugin. It will be created in `dist/`.
+1. Clone this repository.
 
-2. Symlink `dist/` from this repository into pi-web's plugin
+2. Build the plugin. It will be created in `dist/`:
+   
+```sh
+npm run build
+```
+
+3. Symlink `dist/` from this repository into pi-web's plugin
 tree (pi-web handles symlinked plugin directories):
 
 ```sh
