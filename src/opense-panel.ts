@@ -195,23 +195,25 @@ function createOpenseActions(panelId: string): PluginAction[] {
     {
       id: "view.opense",
       title: "Go to OpenSE",
-      // Shortcut-collision check (plan risk 2): mod+6 is free in the current
-      // keybinding map. Claimed today: core mod+1/2/4 (view.chat/files/
-      // terminal, src/client/src/plugins/core/actions.ts), git mod+3
-      // (view.git), plus mod+k, mod+,, mod+enter, mod+., and the mod+g * /
-      // mod+shift+f / mod+shift+r sequences in PiWebApp.ts. syside's
-      // mod+5 / mod+shift+y are NOT in this tree — and mod+6 avoids them and
-      // every core/git combo above either way.
+      // Shortcut-collision check (plan §5, re-verified against the current
+      // pi-web v1.202610.0 tree): mod+6 is free. Claimed today: core mod+1
+      // (view.chat), mod+k, mod+,, mod+enter, mod+. and mod+g c
+      // (src/client/src/plugins/core/actions.ts); bundled files mod+2 /
+      // mod+shift+f, git mod+3 / mod+shift+g, terminal mod+4
+      // (pi-web-plugins/*); and PiWebApp's mod+shift+r plus mod+g m/p/w/s
+      // sequences. syside's mod+5 / mod+shift+y are NOT in this tree — and
+      // mod+6 avoids them and every combo above either way.
       shortcut: "mod+6",
       group: "Navigation",
       // Enabled unconditionally: no provider ownership to gate on.
-      run: (context: PluginRuntimeContext) => { context.selectMainView(panelId); },
+      run: (context: PluginRuntimeContext) => { context.selectWorkspaceTool(panelId); },
     },
     {
       id: "workspace.refresh-opense",
       title: "Refresh OpenSE",
       // Same collision-check result as above: mod+shift+m is unclaimed (the
-      // repo's other mod+shift combos are f/g/r only).
+      // only other mod+shift combos in the tree are mod+shift+f [files],
+      // mod+shift+g [git], mod+shift+r [PiWebApp]).
       shortcut: "mod+shift+m",
       group: "Workspace",
       run: (context: PluginRuntimeContext) => context.refreshWorkspacePanels(panelId),

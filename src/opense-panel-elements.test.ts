@@ -238,9 +238,10 @@ function panelContext(fake: ReturnType<typeof createFakeFiles>): { context: Work
   const context: WorkspacePanelContext = {
     machine: { id: "local", name: "local", kind: "local" },
     workspace: openseWorkspace,
-    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
+    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
     files,
     host: { requestRender },
+    navigate: () => Promise.resolve(),
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
   };

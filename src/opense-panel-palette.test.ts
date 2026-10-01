@@ -57,6 +57,7 @@ function makeContext(insertText?: (text: string) => void): WorkspacePanelContext
     host: {
       requestRender: vi.fn(),
     },
+    navigate: () => Promise.resolve(),
   };
 }
 

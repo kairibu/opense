@@ -31,8 +31,19 @@ afterEach(() => {
 });
 
 describe("bundled OpenSE browser entry", () => {
+  // Migration §2.5: mirror the host's load-time guard
+  // (src/client/src/plugins/external.ts parsePluginModule). A build that
+  // fails this predicate is rejected by the host before activation, so it
+  // must fail fast in CI instead of reaching a deployment.
+  it("passes the host's browser-plugin load-time guard", () => {
+    expect(plugin.apiVersion).toBe(4);
+    expect(typeof plugin.name).toBe("string");
+    expect(plugin.name.length).toBeGreaterThan(0);
+    expect(typeof plugin.activate).toBe("function");
+  });
+
   it("exports the host-expected plugin shape and contributes the panel and both actions", () => {
-    expect(plugin.apiVersion).toBe(2);
+    expect(plugin.apiVersion).toBe(4);
     expect(plugin.name).toBe("OpenSE");
     expect(typeof plugin.activate).toBe("function");
 
@@ -67,12 +78,12 @@ describe("bundled OpenSE browser entry", () => {
     expect(goToOpense.enabled).toBeUndefined();
     expect(refresh.enabled).toBeUndefined();
 
-    const selectMainView = vi.fn<PluginRuntimeContext["selectMainView"]>();
+    const selectWorkspaceTool = vi.fn<PluginRuntimeContext["selectWorkspaceTool"]>();
     const refreshWorkspacePanels = vi.fn<PluginRuntimeContext["refreshWorkspacePanels"]>();
-    const runtime = runtimeContext({ selectMainView, refreshWorkspacePanels });
+    const runtime = runtimeContext({ selectWorkspaceTool, refreshWorkspacePanels });
 
     await goToOpense.run(runtime);
-    expect(selectMainView).toHaveBeenCalledWith("opense:workspace.opense");
+    expect(selectWorkspaceTool).toHaveBeenCalledWith("opense:workspace.opense");
 
     await refresh.run(runtime);
     expect(refreshWorkspacePanels).toHaveBeenCalledWith("opense:workspace.opense");
@@ -80,7 +91,17 @@ describe("bundled OpenSE browser entry", () => {
 });
 
 function activate(runtimePluginId: string) {
-  return plugin.activate({ apiVersion: 2, pluginId: "opense", runtimePluginId, html, svg }).contributions;
+  const result = plugin.activate({
+    apiVersion: 4,
+    pluginId: "opense",
+    runtimePluginId,
+    html,
+    svg,
+    signal: new AbortController().signal,
+    lifetimeSignal: new AbortController().signal,
+  });
+  if (result instanceof Promise) throw new Error("Expected synchronous OpenSE activation");
+  return result.contributions;
 }
 
 function panelContext(workspace = openseWorkspace, machineId = "local"): WorkspacePanelContext {
@@ -88,7 +109,7 @@ function panelContext(workspace = openseWorkspace, machineId = "local"): Workspa
   return {
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace,
-    state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
+    state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
     files: {
       readFile: () => Promise.reject(new Error("not implemented")),
       listFiles: () => Promise.reject(new Error("not implemented")),
@@ -97,6 +118,7 @@ function panelContext(workspace = openseWorkspace, machineId = "local"): Workspa
       moveFile: () => Promise.reject(new Error("not implemented")),
     },
     host: { requestRender: noop },
+    navigate: () => Promise.resolve(),
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
   };
@@ -105,7 +127,8 @@ function panelContext(workspace = openseWorkspace, machineId = "local"): Workspa
 function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
   const noop = () => undefined;
   return {
-    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
+    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
+    navigate: () => Promise.resolve(),
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     openActionPalette: noop,
     focusPrompt: noop,

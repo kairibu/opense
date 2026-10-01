@@ -41,7 +41,7 @@ pi-web then discovers and serves the plugin.
 All sources live under `src/`.
 
 - `src/pi-web-plugin.ts` — browser entry point; default-exports the
-  `PiWebPlugin` activation descriptor (apiVersion 2)
+  `PiWebPlugin` activation descriptor (apiVersion 4)
 - `src/opense-panel.ts` — panel UI and contributions factory (lit custom
   elements; drives the parse on connect)
 - `src/opense-panel-palette.ts` — action palette below the element details

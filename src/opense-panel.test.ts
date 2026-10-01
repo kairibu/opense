@@ -82,11 +82,11 @@ describe("bundled OpenSE browser plugin", () => {
     expect(goToOpense?.enabled).toBeUndefined();
     expect(refresh?.enabled).toBeUndefined();
 
-    const selectMainView = vi.fn<PluginRuntimeContext["selectMainView"]>();
+    const selectWorkspaceTool = vi.fn<PluginRuntimeContext["selectWorkspaceTool"]>();
     const refreshWorkspacePanels = vi.fn<PluginRuntimeContext["refreshWorkspacePanels"]>(() => panel.onInvalidate?.(context));
-    const runtime = runtimeContext({ selectMainView, refreshWorkspacePanels });
+    const runtime = runtimeContext({ selectWorkspaceTool, refreshWorkspacePanels });
     await goToOpense?.run(runtime);
-    expect(selectMainView).toHaveBeenCalledWith("opense:workspace.opense");
+    expect(selectWorkspaceTool).toHaveBeenCalledWith("opense:workspace.opense");
 
     await refresh?.run(runtime);
     expect(refreshWorkspacePanels).toHaveBeenCalledWith("opense:workspace.opense");
@@ -472,9 +472,10 @@ function panelContext(
   return {
     machine: { id: machineId, name: machineId, kind: "local" },
     workspace,
-    state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
+    state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
     files,
     host: { requestRender: noop },
+    navigate: () => Promise.resolve(),
     prompt: { insertText, getText: () => "", getSelection: () => null },
     terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
   };
@@ -483,7 +484,8 @@ function panelContext(
 function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
   const noop = () => undefined;
   return {
-    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "opense:workspace.opense" },
+    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
+    navigate: () => Promise.resolve(),
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     openActionPalette: noop,
     focusPrompt: noop,
