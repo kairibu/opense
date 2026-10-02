@@ -12,21 +12,27 @@
 // The element/DOM wiring is covered by opense-panel.test.ts; these cover the
 // controller's state logic with no DOM at all.
 
-import { describe, expect, it, vi, type Mock } from "vitest";
-import type { FileContentResponse, Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import { describe, expect, it, vi } from "vitest";
+import type { FileContentResponse, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { createModelIndex, loadModel } from "./vendor/sysml-parser.bundle.js";
-import { OpenseWorkspaceController, type OpenseParseJob, type OpenseWorkspaceHost } from "./opense-panel-controller.js";
+import {
+  INVALIDATION_DEBOUNCE_MS,
+  OpenseWorkspaceController,
+  type OpenseParseJob,
+} from "./opense-panel-controller.js";
 import type { OpenseParseResult } from "./opense-panel.js";
 import { parseOpenseWorkspace } from "./opense-panel.js";
-import { createFakeFiles, fileEntry, text, tree, type FakeWorkspaceFiles } from "./test-support.js";
-
-const openseWorkspace: Workspace = {
-  id: "workspace-1",
-  projectId: "project-1",
-  path: "/repo",
-  label: "main",
-  isMain: true,
-};
+import {
+  createFakeCapabilityV1Files,
+  createFakeFiles,
+  createFakeHost,
+  createFakeNavigation,
+  createPanelContext,
+  fileEntry,
+  text,
+  tree,
+  type FakeWorkspaceFiles,
+} from "./test-support.js";
 
 /** A genuine vendor parse result over an empty model: real index and real
  *  workspace from `loadModel([])` + `createModelIndex`, so the
@@ -256,30 +262,333 @@ describe("OpenseWorkspaceController (fake host, no DOM)", () => {
     controller.selectRow("row-3");
     expect(requestRender).toHaveBeenCalledTimes(2);
   });
+
+  // --- W1: automatic invalidation with a reason-aware parse gate ----------
+
+  it("coalesces a mutation/agent-activity burst into one parse and sets stale immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const files = createFakeFiles({
+        trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+        reads: { "a.sysml": text("package Alpha;") },
+      });
+      const { context } = panelContext(files);
+      const { host } = fakeHost();
+      const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+      controller.hostConnected();
+      await settle();
+      expect(files.listCalls).toHaveLength(1);
+      expect(controller.stale).toBe(false);
+
+      const first = controller.invalidate({ reason: "mutation", resources: ["workspace.files"] });
+      // stale is synchronous for every reason, before any parse starts.
+      expect(controller.stale).toBe(true);
+      const second = controller.invalidate({ reason: "mutation", resources: ["workspace.files"] });
+      const third = controller.invalidate({ reason: "agent-activity", resources: ["workspace.files"] });
+      // stale is synchronous for every reason — agent-activity included.
+      expect(controller.stale).toBe(true);
+      // The trailing-edge window is still open: nothing parsed yet.
+      expect(files.listCalls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(INVALIDATION_DEBOUNCE_MS - 1);
+      expect(files.listCalls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all([first, second, third]);
+      // Exactly one parse for the whole burst.
+      expect(files.listCalls).toHaveLength(2);
+      expect(controller.stale).toBe(false);
+
+      // A later burst after completion parses exactly once more (never per event).
+      void controller.invalidate({ reason: "agent-activity", resources: ["workspace.files"] });
+      // stale flips synchronously from a clean state for agent-activity too.
+      expect(controller.stale).toBe(true);
+      void controller.invalidate({ reason: "mutation", resources: ["workspace.files"] });
+      await vi.advanceTimersByTimeAsync(INVALIDATION_DEBOUNCE_MS);
+      expect(files.listCalls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bypasses the debounce for a manual invalidation and cancels the pending one", async () => {
+    vi.useFakeTimers();
+    try {
+      const files = createFakeFiles({
+        trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+        reads: { "a.sysml": text("package Alpha;") },
+      });
+      const { context } = panelContext(files);
+      const { host } = fakeHost();
+      const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+      controller.hostConnected();
+      await settle();
+
+      const pending = controller.invalidate({ reason: "mutation", resources: ["workspace.files"] });
+      const manual = controller.invalidate({ reason: "manual", resources: ["workspace.files"] });
+      await manual;
+      await pending;
+      expect(files.listCalls).toHaveLength(2);
+      // The cancelled timer must never fire a second parse.
+      await vi.advanceTimersByTimeAsync(INVALIDATION_DEBOUNCE_MS);
+      expect(files.listCalls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses immediately for a legacy invalidate call without an argument", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const { context } = panelContext(files);
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    await controller.invalidate();
+    expect(files.listCalls).toHaveLength(2);
+  });
+
+  // --- W3: abort-capable file reads --------------------------------------
+
+  it("forwards the parse signal to capability-v1 files and aborts it on release", async () => {
+    let resolveRead: ((value: FileContentResponse) => void) | undefined;
+    let captured: AbortSignal | undefined;
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+    });
+    files.readFile.mockImplementationOnce((_path, options) => {
+      captured = options?.signal;
+      return new Promise<FileContentResponse>((resolve) => { resolveRead = resolve; });
+    });
+    const { context } = createPanelContext({ files: files.files });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(captured).toBeDefined();
+    expect(captured?.aborted).toBe(false);
+
+    controller.release();
+    expect(captured?.aborted).toBe(true);
+
+    // The aborted run's late resolution must not install a partial result.
+    resolveRead?.(text("package Alpha;"));
+    await settle();
+    expect(controller.result).toBeUndefined();
+  });
+
+  it("aborts the in-flight signal on hostDisconnected and restarts a fresh parse on reconnect", async () => {
+    let resolveRead: ((value: FileContentResponse) => void) | undefined;
+    let captured: AbortSignal | undefined;
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    files.readFile.mockImplementationOnce((_path, options) => {
+      captured = options?.signal;
+      return new Promise<FileContentResponse>((resolve) => { resolveRead = resolve; });
+    });
+    const { context } = createPanelContext({ files: files.files });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+    expect(captured?.aborted).toBe(false);
+
+    controller.hostDisconnected();
+    expect(captured?.aborted).toBe(true);
+    // Reconnecting while the aborted request is still pending does not stack a
+    // second job; the aborted run's `finally` restarts it.
+    controller.hostConnected();
+    expect(files.listCalls).toHaveLength(1);
+
+    resolveRead?.(text("package Alpha;"));
+    await settle();
+    await settle();
+    expect(controller.result?.report.outline.map((row) => row.name)).toContain("Alpha");
+  });
+
+  it("restarts a stale parse on reconnect after an aborted run finished while disconnected", async () => {
+    let resolveRead: ((value: FileContentResponse) => void) | undefined;
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const { context } = createPanelContext({ files: files.files });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+    expect(controller.result).toBeDefined();
+    expect(controller.stale).toBe(false);
+
+    // Arm a re-parse whose read stays pending, then disconnect and let the
+    // aborted run finish entirely while still disconnected: its `finally`
+    // cannot restart the parse (`isConnected` is false).
+    files.readFile.mockImplementationOnce((_path, options) => {
+      expect(options?.signal).toBeDefined();
+      return new Promise<FileContentResponse>((resolve) => { resolveRead = resolve; });
+    });
+    const pending = controller.invalidate({ reason: "manual", resources: ["workspace.files"] });
+    expect(controller.stale).toBe(true);
+    await settle();
+    controller.hostDisconnected();
+    resolveRead?.(text("package Alpha;"));
+    await pending;
+    expect(controller.stale).toBe(true);
+    // The aborted run's discovery walk started, but no result was installed.
+    expect(files.listCalls).toHaveLength(2);
+    expect(controller.result).toBeDefined();
+
+    // With a pre-existing result the old guard would reuse it forever; the
+    // stale flag makes reconnect kick the parse the aborted run could not.
+    controller.hostConnected();
+    expect(controller.loading).toBe(true);
+    await settle();
+    expect(controller.stale).toBe(false);
+    expect(files.listCalls).toHaveLength(3);
+  });
+
+  it("drops a pending debounced invalidation on disconnect and re-parses on reconnect", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const { context } = panelContext(files);
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+    expect(files.listCalls).toHaveLength(1);
+
+    // Disconnecting drops the armed debounce (no parse into a disconnected
+    // panel) and settles its waiters without hanging.
+    const pending = controller.invalidate({ reason: "mutation", resources: ["workspace.files"] });
+    controller.hostDisconnected();
+    await pending;
+    expect(files.listCalls).toHaveLength(1);
+    expect(controller.stale).toBe(true);
+
+    // Reconnect resumes the parse from the surviving stale flag.
+    controller.hostConnected();
+    expect(controller.loading).toBe(true);
+    await settle();
+    expect(controller.stale).toBe(false);
+    expect(files.listCalls).toHaveLength(2);
+  });
+
+  it("never passes request options to a legacy files host", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const { context } = panelContext(files);
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(files.listFiles.mock.calls[0]).toHaveLength(1);
+    expect(files.readFile.mock.calls[0]).toHaveLength(1);
+  });
+
+  // --- W4a: selection ⇄ navigation-query deep links ----------------------
+
+  it("writes the selection into the navigation query", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const { navigation, set } = createFakeNavigation();
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectRow("Tracker::lens")).toBe(true);
+    expect(controller.selectedId).toBe("Tracker::lens");
+    expect(set).toHaveBeenCalledWith("element", "Tracker::lens");
+    expect(navigation.query["element"]).toBe("Tracker::lens");
+  });
+
+  it("keeps the selection local-only when the navigation write fails", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const { navigation, set } = createFakeNavigation({ applied: false });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    const applied = controller.selectRow("Tracker::lens");
+    expect(applied).toBe(false);
+    expect(controller.selectedId).toBe("Tracker::lens");
+    expect(set).toHaveBeenCalledWith("element", "Tracker::lens");
+    expect(navigation.query["element"]).toBeUndefined();
+  });
+
+  it("selects without crashing when the host has no navigation (legacy)", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const { context } = panelContext(files);
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectRow("Tracker::lens")).toBe(true);
+    expect(controller.selectedId).toBe("Tracker::lens");
+  });
+
+  it("restores the deep-linked element after a parse", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::lens" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectedId).toBe("Tracker::lens");
+  });
+
+  it("ignores a stale/unknown deep-linked element id", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::missing" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectedId).toBeUndefined();
+  });
 });
 
-function fakeHost(): { host: OpenseWorkspaceHost } {
-  return { host: { isConnected: false } };
+function fakeHost() {
+  return { host: createFakeHost() };
 }
 
-/** Build one panel context wrapping the fake files adapter plus a `requestRender`
- *  spy — the controller's render path fires this (via the context host). */
-function panelContext(fake: FakeWorkspaceFiles): { context: WorkspacePanelContext; requestRender: Mock } {
-  const requestRender = vi.fn();
-  const context: WorkspacePanelContext = {
-    machine: { id: "local", name: "local", kind: "local" },
-    workspace: openseWorkspace,
-    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
-    files: fake.files,
-    host: { requestRender },
-    navigate: () => Promise.resolve(),
-    prompt: { insertText: noop, getText: () => "", getSelection: () => null },
-    terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
-  };
+/** Thin positional adapter over the shared `createPanelContext` builder. */
+function panelContext(fake: FakeWorkspaceFiles): { context: WorkspacePanelContext; requestRender: ReturnType<typeof vi.fn> } {
+  const { context, requestRender } = createPanelContext({ files: fake.files });
   return { context, requestRender };
 }
-
-const noop = () => undefined;
 
 async function settle(): Promise<void> {
   for (let index = 0; index < 10; index += 1) await Promise.resolve();

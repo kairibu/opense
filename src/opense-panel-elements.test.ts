@@ -16,7 +16,7 @@
 // host template's property bindings.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { OpenseWorkspaceController } from "./opense-panel-controller.js";
 import { parseOpenseWorkspace } from "./opense-panel.js";
 import type { OpenseActionPaletteElement } from "./opense-panel-palette.js";
@@ -27,15 +27,7 @@ import {
   type OpensePanelActivityElement,
   type OpensePanelBodyElement,
 } from "./opense-panel-elements.js";
-import { createFakeFiles, fileEntry, text, tree } from "./test-support.js";
-
-const openseWorkspace: Workspace = {
-  id: "workspace-1",
-  projectId: "project-1",
-  path: "/repo",
-  label: "main",
-  isMain: true,
-};
+import { createFakeFiles, createPanelContext, fileEntry, text, tree } from "./test-support.js";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -232,20 +224,8 @@ async function flushElements(body: OpensePanelBodyElement): Promise<void> {
 }
 
 function panelContext(fake: ReturnType<typeof createFakeFiles>): { context: WorkspacePanelContext; requestRender: ReturnType<typeof vi.fn> } {
-  const requestRender = vi.fn();
-  const files = fake.files;
-  const noop = () => undefined;
-  const context: WorkspacePanelContext = {
-    machine: { id: "local", name: "local", kind: "local" },
-    workspace: openseWorkspace,
-    state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
-    files,
-    host: { requestRender },
-    navigate: () => Promise.resolve(),
-    prompt: { insertText: noop, getText: () => "", getSelection: () => null },
-    terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
-  };
-  return { context, requestRender };
+  // Plan v4 §0.2: the shared builder in test-support.ts owns the context shape.
+  return createPanelContext({ files: fake.files });
 }
 
 async function settle(): Promise<void> {

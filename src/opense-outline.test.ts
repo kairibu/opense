@@ -61,6 +61,15 @@ describe("outline over a real merged loadModel workspace", () => {
     ]);
   });
 
+  it("derives identical outline ids for two parses of identical content (deep-link stability)", () => {
+    // W4a relies on element ids being content-derived, not parse-order
+    // counters: a deterministic re-parse of the same sources must reproduce
+    // exactly the same id set, otherwise shared deep links would drift.
+    const first = outlineRows(createModelIndex(loadModel(sources))).map((row) => row.id);
+    const second = outlineRows(createModelIndex(loadModel(sources))).map((row) => row.id);
+    expect(second).toEqual(first);
+  });
+
   it("reports per-file provenance in elementDetails", () => {
     const lens = elementDetails(index, workspace, "Tracker::Parts::lens");
     expect(lens?.kind).toBe("part");

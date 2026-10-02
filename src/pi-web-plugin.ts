@@ -13,9 +13,13 @@ import { createOpenseBrowserContributions } from "./opense-panel.js";
 const plugin: PiWebPlugin = {
   apiVersion: 4,
   name: "OpenSE",
-  activate: ({ runtimePluginId, html, svg }) => ({
-    contributions: createOpenseBrowserContributions(runtimePluginId, html, svg),
-  }),
+  activate: ({ runtimePluginId, html, svg }) => {
+    const { contributions, dispose } = createOpenseBrowserContributions(runtimePluginId, html, svg);
+    // Keep activation synchronous; W2 adds the activation-result `dispose` so
+    // the host's shutdown/rollback path releases the per-workspace registry
+    // (aborting in-flight parses and dropping every cached model index).
+    return { contributions, dispose };
+  },
 };
 
 export default plugin;

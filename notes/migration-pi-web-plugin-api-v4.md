@@ -182,37 +182,54 @@ re-deploying an unusable build.
   `../pi-web` docs — update the README line as part of the
   implementation PR.
 
-## 4. Optional v4 follow-ups (not part of this migration; record as candidates)
+## 4. Optional v4 follow-ups
 
-Ordered by value for OpenSE:
+Ordered by value for OpenSE. **Status (2026-10-05, plan
+`notes/plan-v4-features.md`):** items 1–3 are implemented (W1–W3); item 4
+shipped partial (W4a query deep links; `fileOpenQuery` dropped with the
+rationale below); items 5–6 remain dropped/deferred.
 
 1. **`invalidationResources: ["workspace.files"]` on the panel** — v4 lets a
    panel declare fixed workspace resources and receive *automatic*
    `onInvalidate(context, invalidation)` calls with
    `{ reason, resources }` (`manual | mutation | agent-activity`). This
-   would make the panel re-run discovery + parse when `.sysml` files change
-   or agent work finishes — today only the manual Refresh action re-parses.
-   The controller's parse job would need a cheap reason-aware gate to avoid
-   reparsing on every file mutation burst.
+   makes the panel re-run discovery + parse when `.sysml` files change or
+   agent work finishes. **Shipped (W1):** the panel declares
+   `invalidationResources: ["workspace.files"]`; the controller gates by
+   reason — `manual` parses immediately, `mutation` / `agent-activity` are
+   trailing-edge debounced (`INVALIDATION_DEBOUNCE_MS = 500`) and `stale` is
+   set synchronously.
 2. **`dispose(signal)`** in the activation result to release the
    `OpenseWorkspaceRegistry` (all cached model indexes) on browser-host
-   shutdown instead of relying on LRU eviction only.
+   shutdown instead of relying on LRU eviction only. **Shipped (W2):**
+   `createOpenseBrowserContributions` returns `{ contributions, dispose }`
+   and `pi-web-plugin.ts` forwards `dispose` on the activation result.
 3. **AbortSignal-capable file reads.** With capability detection
    (`files.capabilityVersion === 1`), `listFiles`/`readFile` accept
-   `{ signal }`; discovery could abort an in-flight parse when the
-   workspace switches or the panel is invalidated/evicted.
+   `{ signal }`. **Shipped (W3):** discovery threads the parse run's signal
+   through a per-run `AbortController`; `release()` / `hostDisconnected()`
+   abort it, aborted read outcomes are dropped silently, and legacy hosts
+   never receive the options argument.
 4. **Deep links.** `WorkspacePanelNavigationV1`
    (`context.navigation.query` / `.set(key, value)`) enables shareable URLs
-   for a selected model element; `fileOpenQuery(context, path)` would let
-   chat file links / Files open a `.sysml` file into the OpenSE panel.
+   for a selected model element. **Shipped (W4a):** selecting an outline row
+   writes `element=<id>` and a fresh tab restores the selection on parse
+   completion (fail-safe: a stale id selects nothing). `fileOpenQuery`
+   (letting chat file links / Files open a `.sysml` file into OpenSE) is
+   **dropped**: opense never reaches file-open arbitration (the bundled
+   Files panel answers every path first) and link payloads strip the
+   element identity a `model.sysml` link would need — see
+   `notes/plan-v4-features.md` §0.2.
 5. **`contentRenderers`** contribution: a `.sysml` / SysML-fence renderer
    (outline or formatted text preview) for chat and Files via the new
-   content-rendering capability — natural browser-only fit.
+   content-rendering capability — natural browser-only fit. **Dropped** for
+   now (plan §0.3); do not create `src/opense-content-renderer.ts`.
 6. **Server entry later, if ever:** would mean `apiVersion: 3` +
    `ServerPluginPeer` (`peer`) or a `WorkspaceProvider`, a persistent
    `dataDirectory`, and forced `machineSpecific: true`. Documented here so
    nobody reuses `apiVersion: 1` server shapes; not recommended now (the
    in-browser parse keeps OpenSE simple, federated-safe, and restart-free).
+   **Out of scope** (plan §0.4).
 
 ## 5. Risks
 

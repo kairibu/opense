@@ -27,8 +27,11 @@
 //    the panel itself communicates the empty state ("no parseable `.sysml`
 //    files found in this workspace"); asynchronous detection cannot drive the sync
 //    `visible` callback, so hiding is not attempted in v1.
-//  - `onInvalidate` re-runs discovery + parse unconditionally for the
-//    connected workspace — there is no owned-workspace gate to check.
+//  - `onInvalidate` (W1) re-runs discovery + parse for the connected workspace
+//    — there is no owned-workspace gate to check. Manual invalidations parse
+//    immediately; automatic `workspace.files` invalidations (mutation /
+//    agent-activity) are trailing-edge debounced in the controller so a burst
+//    coalesces into one parse.
 //  - This is an in-browser parse (SysIDE/Arcadia-style subset), NOT semantic
 //    validation: copy says "parse", never "validate", and diagnostics render
 //    as the parser's pre-formatted output (plan §4 + risk 3).
@@ -42,6 +45,7 @@ import type {
   PluginContributions,
   PluginRuntimeContext,
   SvgTemplateTag,
+  WorkspaceInvalidation,
   WorkspacePanelContext,
   WorkspacePanelContribution,
 } from "@jmfederico/pi-web/plugin-api";
@@ -50,7 +54,7 @@ import type { ModelIndex, Workspace as ParserWorkspace } from "./vendor/sysml-pa
 import { createModelIndex, loadModel } from "./vendor/sysml-parser.bundle.js";
 import type { OpenseWorkspaceReport } from "./opense-contract.js";
 import { openseReportFromWorkspace } from "./opense-contract.js";
-import type { OpenseDiscoveryFiles } from "./opense-discovery.js";
+import type { OpenseDiscoveryFiles, OpenseDiscoveryRequestOptions } from "./opense-discovery.js";
 import { discoverOpenseFiles } from "./opense-discovery.js";
 import { outlineRows } from "./opense-outline.js";
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
@@ -77,10 +81,14 @@ export interface OpenseParseResult {
  * discovered source → `createModelIndex` → outline + report. The injected
  * `files` adapter (structurally satisfied by `context.files`) is the only
  * boundary, so tests drive the whole job through a fake and the panel never
- * touches `context.backend`.
+ * touches `context.backend`. `options` (W3) forwards the run's AbortSignal to
+ * capability-v1 file adapters; legacy adapters are called without it.
  */
-export async function parseOpenseWorkspace(files: OpenseDiscoveryFiles): Promise<OpenseParseResult> {
-  const discovery = await discoverOpenseFiles(files);
+export async function parseOpenseWorkspace(
+  files: OpenseDiscoveryFiles,
+  options?: OpenseDiscoveryRequestOptions,
+): Promise<OpenseParseResult> {
+  const discovery = await discoverOpenseFiles(files, options);
   const workspace = loadModel(discovery.files);
   const index = createModelIndex(workspace);
   const outline = outlineRows(index);
@@ -99,12 +107,24 @@ export async function parseOpenseWorkspace(files: OpenseDiscoveryFiles): Promise
   return { report, index, workspace };
 }
 
+/** Browser contribution factory result (W2): the contributions plus the
+ *  activation-result `dispose` that releases the per-workspace registry. */
+export interface OpenseBrowserContributions {
+  contributions: PluginContributions;
+  /** Release every cached per-workspace controller (host dispose/rollback). */
+  dispose: () => void;
+}
+
 /**
  * Browser contribution factory (mirrors the git browser entry shape minus the
  * source-plugin-id ownership parameter, which opense never uses): actions +
  * the always-visible workspace panel. `runtimePluginId` prefixes the panel
  * and action targets so qualified contribution references stay host-unique on
  * federated machines.
+ *
+ * (W2) Also hands back the registry release as `dispose`, so the activation
+ * result can free every cached model index on host shutdown instead of
+ * relying on LRU eviction only.
  *
  * `html`/`svg` are accepted-but-ignored (plan §3.3): the elements render with
  * this module's own lit tags, but the parameter list is frozen so a single
@@ -114,14 +134,17 @@ export function createOpenseBrowserContributions(
   runtimePluginId: string,
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
-): PluginContributions {
+): OpenseBrowserContributions {
   const panelId = `${runtimePluginId}:${OPENSE_PANEL_LOCAL_ID}`;
   const registry = new OpenseWorkspaceRegistry();
   defineOpensePanelElements();
   defineOpenseActionPaletteElement();
   return {
-    actions: createOpenseActions(panelId),
-    workspacePanels: [createOpensePanel(registry)],
+    contributions: {
+      actions: createOpenseActions(panelId),
+      workspacePanels: [createOpensePanel(registry)],
+    },
+    dispose: () => { registry.release(); },
   };
 }
 
@@ -160,10 +183,19 @@ class OpenseWorkspaceRegistry {
     return controller;
   }
 
-  /** Panel invalidation: re-run discovery + parse unconditionally for the
-   *  connected workspace (browser-only plugin — no owned-workspace gate). */
-  invalidate(context: WorkspacePanelContext): Promise<void> {
-    return this.for(context).invalidate();
+  /** Panel invalidation (W1): re-run discovery + parse for the connected
+   *  workspace (browser-only plugin — no owned-workspace gate). The optional
+   *  `invalidation` carries the reason, which gates debouncing. */
+  invalidate(context: WorkspacePanelContext, invalidation?: WorkspaceInvalidation): Promise<void> {
+    return this.for(context).invalidate(invalidation);
+  }
+
+  /** Release every cached workspace controller (W2 activation `dispose`):
+   *  aborts in-flight parses, drops pending debounced invalidations, and
+   *  clears the map so every model index is garbage-collected. */
+  release(): void {
+    for (const controller of this.workspaces.values()) controller.release();
+    this.workspaces.clear();
   }
 
   private evictOldest(): void {
@@ -241,7 +273,10 @@ function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelCon
     // Browser-only plugins own no workspace provider, so the panel is always
     // visible; the discovery-based empty state carries the "no files" story.
     visible: () => true,
-    onInvalidate: (context) => registry.invalidate(context),
+    // W1: declare the fixed workspace resource whose automatic invalidations
+    // (mutation, agent-activity) the host forwards here.
+    invalidationResources: ["workspace.files"],
+    onInvalidate: (context, invalidation) => registry.invalidate(context, invalidation),
     render: (context) => renderOpensePanel(registry, context),
   };
 }

@@ -25,19 +25,25 @@
 // ---------------------------------------------------------------------------
 
 import type { ReactiveController } from "lit";
-import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { WorkspaceInvalidation, WorkspacePanelContext, WorkspacePanelNavigationV1 } from "@jmfederico/pi-web/plugin-api";
 import type { Member } from "./vendor/sysml-parser.bundle.js";
 import type { OutlineRow } from "./opense-contract.js";
-import type { OpenseDiscoveryFiles } from "./opense-discovery.js";
+import type { OpenseDiscoveryFiles, OpenseDiscoveryRequestOptions } from "./opense-discovery.js";
 import type { OpenseParseResult } from "./opense-panel.js";
 import { namedOutlineKinds } from "./opense-outline.js";
 import { formatUnknownError } from "./opense-shared.js";
 
+/** Trailing-edge invalidation debounce (W1): mutation / agent-activity bursts
+ *  within this window coalesce into exactly one parse. A named export so tests
+ *  can advance fake timers by the real value instead of duplicating it. */
+export const INVALIDATION_DEBOUNCE_MS = 500;
+
 /** One parse job: discovery walk → `loadModel` → `createModelIndex` →
  *  outline + report. Injected into the controller (rather than imported from
  *  the panel module) so this module has no runtime dependency on it and tests
- *  can substitute fakes for rejection/deferred-control cases. */
-export type OpenseParseJob = (files: OpenseDiscoveryFiles) => Promise<OpenseParseResult>;
+ *  can substitute fakes for rejection/deferred-control cases. `options` (W3)
+ *  carries the run's AbortSignal to capability-v1 file adapters. */
+export type OpenseParseJob = (files: OpenseDiscoveryFiles, options?: OpenseDiscoveryRequestOptions) => Promise<OpenseParseResult>;
 
 /** The connection flag the controller's late-async-write guards read. This
  *  is NOT structurally satisfied by a LitElement: the controller's own
@@ -104,6 +110,18 @@ export class OpenseWorkspaceController implements ReactiveController {
   /** In-flight parse job; re-entrant calls reuse it (no overlapping jobs). */
   private parseRequest: Promise<void> | undefined;
 
+  /** Abort handle of the in-flight parse run (W3); aborted on
+   *  hostDisconnected/release so capability-v1 reads stop early. */
+  private abortController: AbortController | undefined;
+
+  /** Trailing-edge timer for debounced (mutation/agent-activity) invalidations. */
+  private invalidationTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Resolvers of the promises returned by debounced `invalidate` calls; they
+   *  settle after the coalesced parse the timer scheduled, or immediately when
+   *  the pending debounce is cancelled (manual parse/release/disconnect). */
+  private invalidationWaiters: Array<() => void> = [];
+
   constructor(host: OpenseWorkspaceHost, context: WorkspacePanelContext, parseJob: OpenseParseJob) {
     this.host = host;
     this.context = context;
@@ -113,31 +131,55 @@ export class OpenseWorkspaceController implements ReactiveController {
   /** The workspace panel connected (the activity element calls this from its
    *  connect path). Marks the host connected and kicks the first parse;
    *  later parses reuse the in-flight job through the parseRequest guard, so
-   *  overlapping jobs never run. */
+   *  overlapping jobs never run. A re-connect also resumes a parse that was
+   *  aborted/stale while disconnected: an aborted run's `finally` only
+   *  restarts when `isConnected` was already true, so with a pre-existing
+   *  result the panel would otherwise stay outdated. */
   hostConnected(): void {
     this.host.isConnected = true;
-    if (this.result === undefined && this.parseRequest === undefined) void this.parse();
+    if (this.parseRequest === undefined && (this.result === undefined || this.stale)) void this.parse();
   }
 
   /** The workspace panel disconnected: `isConnected` drops late async writes
-   *  until the workspace reconnects (§3.2). */
+   *  until the workspace reconnects (§3.2), the in-flight parse run is aborted
+   *  (W3), and any pending debounced invalidation is dropped so its timer
+   *  cannot fire a parse into the disconnected panel. `stale` survives, so
+   *  `hostConnected()` restarts the parse on reconnect. */
   hostDisconnected(): void {
     this.host.isConnected = false;
+    this.abortController?.abort();
+    this.cancelDebouncedInvalidation();
   }
 
   /** LRU eviction release (§3.2): the workspace left the registry, so late
-   *  async writes drop even if the element stayed connected. Terminal —
+   *  async writes drop even if the element stayed connected. Aborts the
+   *  in-flight parse and cancels any debounced invalidation; terminal —
    *  re-rendering the workspace creates a fresh controller. */
   release(): void {
     this.host.isConnected = false;
+    this.abortController?.abort();
+    this.cancelDebouncedInvalidation();
   }
 
-  /** Panel invalidation: re-run discovery + parse unconditionally for the
-   *  connected workspace (browser-only plugin — no owned-workspace gate). */
-  invalidate(): Promise<void> {
+  /** Panel invalidation (W1): a manual refresh parses immediately (the
+   *  existing Refresh semantics); automatic mutation / agent-activity
+   *  invalidations are trailing-edge debounced so a burst coalesces into one
+   *  parse. A debounced invalidation's promise settles when that coalesced
+   *  parse completes, or immediately when the pending debounce is cancelled
+   *  (manual parse/release/disconnect). The in-flight `parseRequest` join is
+   *  untouched.
+   *
+   *  `stale` is set synchronously for every reason — but only once a result
+   *  exists: with nothing parsed yet there is no stale report to mark, and the
+   *  `loading` state already communicates the pending first parse. */
+  invalidate(invalidation?: WorkspaceInvalidation): Promise<void> {
     this.stale = this.result !== undefined;
     this.requestUpdate();
-    return this.parse();
+    if (invalidation === undefined || invalidation.reason === "manual") {
+      this.cancelDebouncedInvalidation();
+      return this.parse();
+    }
+    return this.scheduleInvalidation();
   }
 
   parse(): Promise<void> {
@@ -149,8 +191,17 @@ export class OpenseWorkspaceController implements ReactiveController {
     this.error = undefined;
     this.requestUpdate();
 
-    const request = this.parseJob(this.context.files)
+    // One AbortController per run (W3). Only capability-v1 hosts accept the
+    // options argument; legacy files are called with the path alone.
+    const abort = new AbortController();
+    this.abortController = abort;
+    const options = this.context.files.capabilityVersion === 1 ? { signal: abort.signal } : undefined;
+
+    const request = this.parseJob(this.context.files, options)
       .then((result) => {
+        // An aborted run must never install its (partial/empty) result; its
+        // `finally` restarts a fresh run once the panel reconnects.
+        if (abort.signal.aborted) return;
         if (!this.host.isConnected) return;
         // The outline renders named rows only, so the kind filter is built
         // from the named kinds (an all-unnamed kind could never match).
@@ -159,26 +210,47 @@ export class OpenseWorkspaceController implements ReactiveController {
         this.result = result;
         this.stale = false;
         this.error = undefined;
-        // A re-parse may drop the selected element (file removed/edited);
-        // clear the dangling selection the same way git clears vanished files.
-        this.selectedId = selectionIn(result.report.outline, this.kindFilter, this.selectedId);
+        // W4 deep link: a query element id wins over the previous selection —
+        // restore it only if the fresh outline still has that id (fail-safe:
+        // a stale URL selects nothing, never the wrong element). Without a
+        // query id, keep the previous selection when it survives the re-parse.
+        const requested = navigationElementId(this.context.navigation);
+        this.selectedId = selectionIn(result.report.outline, this.kindFilter, requested ?? this.selectedId);
       })
       .catch((error: unknown) => {
+        if (abort.signal.aborted) return;
         if (this.host.isConnected) this.error = formatUnknownError(error);
       })
       .finally(() => {
         if (this.parseRequest !== request) return;
         this.parseRequest = undefined;
+        if (this.abortController === abort) this.abortController = undefined;
         this.loading = false;
         this.requestUpdate();
+        // A disconnect/eviction aborted this run before its result landed:
+        // restart it when the panel is still/again connected. A terminal
+        // release left `isConnected` false, so evicted workspaces never
+        // restart.
+        if (abort.signal.aborted && this.host.isConnected) void this.parse();
       });
     this.parseRequest = request;
     return request;
   }
 
-  selectRow(rowId: string): void {
+  /** Select an outline row for the element-detail pane and mirror it into the
+   *  contribution-scoped navigation query (W4) so the URL round-trips. Returns
+   *  false when the host rejected the write (stale route); the selection is
+   *  still applied locally. */
+  selectRow(rowId: string): boolean {
     this.selectedId = rowId;
+    // W4: mirror the selection into the contribution-scoped query so the URL
+    // round-trips. `set` is typed `void` but PI-WEB returns false when the
+    // retained context is stale (mirror the host terminal runtime); checking
+    // that runtime boolean keeps a rejected write local-only with the URL
+    // untouched — nothing to roll back.
+    const navigationResult: unknown = this.context.navigation?.set("element", rowId);
     this.requestUpdate();
+    return navigationResult !== false;
   }
 
   setKindFilter(kind: Member["kind"] | undefined): void {
@@ -194,6 +266,41 @@ export class OpenseWorkspaceController implements ReactiveController {
     // re-renders reach the same fresh `host` snapshot the parse reads use.
     if (this.host.isConnected) this.context.host.requestRender();
   }
+
+  /** Debounce one automatic invalidation (W1): restart the trailing-edge
+   *  timer and return a promise that settles after the coalesced parse. */
+  private scheduleInvalidation(): Promise<void> {
+    if (this.invalidationTimer !== undefined) clearTimeout(this.invalidationTimer);
+    const pending = new Promise<void>((resolve) => { this.invalidationWaiters.push(resolve); });
+    this.invalidationTimer = setTimeout(() => {
+      this.invalidationTimer = undefined;
+      const waiters = this.invalidationWaiters;
+      this.invalidationWaiters = [];
+      void this.parse().finally(() => { for (const resolve of waiters) resolve(); });
+    }, INVALIDATION_DEBOUNCE_MS);
+    return pending;
+  }
+
+  /** Drop a pending debounced invalidation (manual parse or release) and
+   *  settle its waiters so awaiting callers never hang. */
+  private cancelDebouncedInvalidation(): void {
+    if (this.invalidationTimer !== undefined) {
+      clearTimeout(this.invalidationTimer);
+      this.invalidationTimer = undefined;
+    }
+    const waiters = this.invalidationWaiters;
+    this.invalidationWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+}
+
+/** The deep-linked element id (W4), or undefined when the host supplies no
+ *  navigation / no `element` query key. A repeated key takes its first value. */
+function navigationElementId(navigation: WorkspacePanelNavigationV1 | undefined): string | undefined {
+  const value = navigation?.query["element"];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0];
+  return undefined;
 }
 
 /**

@@ -13,7 +13,7 @@ import {
   discoverOpenseFiles,
   type OpenseDiscoveryFiles,
 } from "./opense-discovery.js";
-import { createFakeFiles, dirEntry, fileEntry, symlinkEntry, text, tree } from "./test-support.js";
+import { createFakeCapabilityV1Files, createFakeFiles, dirEntry, fileEntry, symlinkEntry, text, tree } from "./test-support.js";
 
 describe("opense discovery", () => {
   it("collects nested .sysml files (case-insensitive), sorted by path, skipping other files and symlinks", async () => {
@@ -390,6 +390,114 @@ describe("opense discovery", () => {
     expect(result.files).toEqual([]);
     expect(result.diagnostics).toEqual([]);
     expect(readCalls).toEqual([]);
+  });
+
+  // --- W3: abort-capable reads -------------------------------------------
+
+  it("forwards the run's AbortSignal to capability-v1 listFiles and readFile", async () => {
+    const controller = new AbortController();
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package A;") },
+    });
+
+    const result = await discoverOpenseFiles(files.files, { signal: controller.signal });
+
+    expect(result.files).toEqual([{ path: "a.sysml", source: "package A;" }]);
+    expect(result.diagnostics).toEqual([]);
+    expect(files.listSignals).toEqual([controller.signal]);
+    expect(files.readSignals).toEqual([controller.signal]);
+  });
+
+  it("calls legacy adapters without an options argument when no signal is supplied", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package A;") },
+    });
+
+    await discoverOpenseFiles(files.files);
+
+    expect(files.listFiles.mock.calls[0]).toHaveLength(1);
+    expect(files.readFile.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("drops read outcomes silently once the run's signal is aborted", async () => {
+    const controller = new AbortController();
+    let resolveRead: ((value: FileContentResponse) => void) | undefined;
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+    });
+    files.readFile.mockImplementationOnce(() =>
+      new Promise<FileContentResponse>((resolve) => { resolveRead = resolve; }),
+    );
+
+    const pending = discoverOpenseFiles(files.files, { signal: controller.signal });
+    // Let the walk reach the (deferred) read before aborting mid-batch.
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    controller.abort();
+    resolveRead?.(text("package A;"));
+
+    const result = await pending;
+
+    expect(result.files).toEqual([]);
+    // An abort is a cancellation, not a failure: no error/warning diagnostic.
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("does not diagnose an AbortError rejection produced after abort", async () => {
+    const controller = new AbortController();
+    let rejectRead: ((error: unknown) => void) | undefined;
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+    });
+    files.readFile.mockImplementationOnce(() =>
+      new Promise<FileContentResponse>((_resolve, reject) => { rejectRead = reject; }),
+    );
+
+    const pending = discoverOpenseFiles(files.files, { signal: controller.signal });
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    controller.abort();
+    rejectRead?.(new DOMException("Aborted", "AbortError"));
+
+    const result = await pending;
+
+    expect(result.files).toEqual([]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("issues no further reads once the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const files = createFakeCapabilityV1Files({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package A;") },
+    });
+
+    const result = await discoverOpenseFiles(files.files, { signal: controller.signal });
+
+    expect(result.files).toEqual([]);
+    expect(result.diagnostics).toEqual([]);
+    expect(files.listCalls).toEqual([]);
+    expect(files.readCalls).toEqual([]);
+  });
+
+  it("does not diagnose a listFiles rejection produced after abort", async () => {
+    const controller = new AbortController();
+    let rejectList: ((error: unknown) => void) | undefined;
+    const files = createFakeCapabilityV1Files();
+    files.listFiles.mockImplementationOnce(() =>
+      new Promise<FileTreeResponse>((_resolve, reject) => { rejectList = reject; }),
+    );
+
+    const pending = discoverOpenseFiles(files.files, { signal: controller.signal });
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    controller.abort();
+    rejectList?.(new DOMException("Aborted", "AbortError"));
+
+    const result = await pending;
+
+    expect(result.files).toEqual([]);
+    expect(result.diagnostics).toEqual([]);
   });
 });
 // --- in-memory fake adapter: the shared createFakeFiles + entry/tree/text

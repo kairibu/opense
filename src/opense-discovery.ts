@@ -63,12 +63,22 @@ const SYSML_EXTENSION = ".sysml";
 /** Directories never expanded, at any depth (matched by exact leaf name). */
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set([".git", "node_modules"]);
 
+/** Optional per-request options (v1 capability hosts): the abort signal the
+ *  controller threads through one parse run. Structural twin of the host's
+ *  `WorkspaceFileRequestOptions`, so no host import is required. */
+export interface OpenseDiscoveryRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
 /** Narrow file-access surface discovery needs, structurally satisfied by the
- *  host `context.files` (`WorkspaceFiles`): its `listFiles`/`readFile` return
- *  supersets of the response types below, so no host import is required. */
+ *  host `context.files` (`WorkspaceFiles` / `WorkspaceFilesCapabilityV1`): its
+ *  `listFiles`/`readFile` return supersets of the response types below, so no
+ *  host import is required. The optional second argument is only ever passed
+ *  for capability-v1 hosts (legacy adapters accept the extra argument but
+ *  never receive it — the controller gates on `capabilityVersion`). */
 export interface OpenseDiscoveryFiles {
-  listFiles(relativePath: string): Promise<OpenseDiscoveryFileTree>;
-  readFile(relativePath: string): Promise<OpenseDiscoveryFileContent>;
+  listFiles(relativePath: string, options?: OpenseDiscoveryRequestOptions): Promise<OpenseDiscoveryFileTree>;
+  readFile(relativePath: string, options?: OpenseDiscoveryRequestOptions): Promise<OpenseDiscoveryFileContent>;
 }
 
 /** Minimal `FileTreeResponse` subset: entry list plus the truncation flag. */
@@ -121,8 +131,16 @@ interface PendingDirectory {
  * injected `files` adapter. Returns the files sorted by path (deterministic
  * `loadModel` input) plus diagnostics for skipped/inaccessible content; never
  * throws (adapter failures are diagnosed, not raised).
+ *
+ * `options` (W3) carries the parse run's AbortSignal: once aborted the walk
+ * stops, in-flight reads are not awaited for their outcome, and every read
+ * result still in hand is dropped silently (no error diagnostics — an abort
+ * is a cancellation, not a failure).
  */
-export async function discoverOpenseFiles(files: OpenseDiscoveryFiles): Promise<OpenseDiscoveryResult> {
+export async function discoverOpenseFiles(
+  files: OpenseDiscoveryFiles,
+  options?: OpenseDiscoveryRequestOptions,
+): Promise<OpenseDiscoveryResult> {
   const collected: SourceFile[] = [];
   const diagnostics: DiscoveryDiagnostic[] = [];
   const visitedDirectories = new Set<string>([WORKSPACE_ROOT]);
@@ -136,14 +154,17 @@ export async function discoverOpenseFiles(files: OpenseDiscoveryFiles): Promise<
   const pending: PendingDirectory[] = [{ path: WORKSPACE_ROOT, depth: 0 }];
   let nextIndex = 0;
   while (nextIndex < pending.length && !walkStopped) {
+    if (isAborted(options)) break;
     const directory = pending[nextIndex];
     if (directory === undefined) break;
     nextIndex += 1;
 
     let tree: OpenseDiscoveryFileTree;
     try {
-      tree = await files.listFiles(directory.path);
+      tree = options === undefined ? await files.listFiles(directory.path) : await files.listFiles(directory.path, options);
     } catch (error) {
+      // An abort cancels the walk; it must not surface as a listing failure.
+      if (isAborted(options)) break;
       diagnostics.push(listErrorDiagnostic(directory.path, error));
       continue;
     }
@@ -190,7 +211,7 @@ export async function discoverOpenseFiles(files: OpenseDiscoveryFiles): Promise<
         filesAdmitted += 1;
         pendingFileReads.push(entry.path);
         if (pendingFileReads.length >= MAX_CONCURRENT_READS) {
-          await flushPendingReads(pendingFileReads, collected, diagnostics, files);
+          await flushPendingReads(pendingFileReads, collected, diagnostics, files, options);
         }
       }
     }
@@ -201,7 +222,7 @@ export async function discoverOpenseFiles(files: OpenseDiscoveryFiles): Promise<
   }
 
   // The final partial batch (and any reads admitted before another cap fired).
-  await flushPendingReads(pendingFileReads, collected, diagnostics, files);
+  await flushPendingReads(pendingFileReads, collected, diagnostics, files, options);
 
   collected.sort(compareByPath);
   return { files: collected, diagnostics };
@@ -218,25 +239,39 @@ async function flushPendingReads(
   collected: SourceFile[],
   diagnostics: DiscoveryDiagnostic[],
   files: OpenseDiscoveryFiles,
+  options: OpenseDiscoveryRequestOptions | undefined,
 ): Promise<void> {
   const paths = pending.splice(0);
   if (paths.length === 0) return;
-  const settled = await Promise.allSettled(paths.map((path) => files.readFile(path)));
+  // Aborted before the batch was issued: drop the paths, issue no reads.
+  if (isAborted(options)) return;
+  const settled = await Promise.allSettled(
+    paths.map((path) => options === undefined ? files.readFile(path) : files.readFile(path, options)),
+  );
   // Zip outcomes with their paths so commit order is encounter order.
   const outcomes = paths.map((path, index) => ({ path, result: settled[index] }));
   for (const { path, result } of outcomes) {
     if (result === undefined) continue;
-    applyReadResult(path, result, collected, diagnostics);
+    applyReadResult(path, result, collected, diagnostics, options?.signal);
   }
 }
 
-/** Commit one read outcome: diagnostic on rejection/binary/truncated, else collect. */
+/** True once the run's abort signal has fired (undefined signal = never). */
+function isAborted(options: OpenseDiscoveryRequestOptions | undefined): boolean {
+  return options?.signal?.aborted === true;
+}
+
+/** Commit one read outcome: diagnostic on rejection/binary/truncated, else collect.
+ *  An abort drops the outcome silently — an AbortError rejection or a partial
+ *  result is a cancellation, not a discovery failure. */
 function applyReadResult(
   path: string,
   settled: PromiseSettledResult<OpenseDiscoveryFileContent>,
   collected: SourceFile[],
   diagnostics: DiscoveryDiagnostic[],
+  signal: AbortSignal | undefined,
 ): void {
+  if (signal?.aborted === true) return;
   if (settled.status === "rejected") {
     diagnostics.push({
       severity: "error",

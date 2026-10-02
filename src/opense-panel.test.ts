@@ -21,6 +21,7 @@ import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FileContentResponse,
+  PluginContributions,
   PluginRuntimeContext,
   Workspace,
   WorkspacePanelContext,
@@ -35,6 +36,8 @@ import {
 } from "./opense-panel-elements.js";
 import {
   createFakeFiles,
+  createFakeNavigation,
+  createPanelContext,
   dirEntry,
   fileEntry,
   text,
@@ -59,8 +62,8 @@ afterEach(() => {
 
 describe("bundled OpenSE browser plugin", () => {
   it("contributes an always-visible panel and two unconditional shortcut actions", async () => {
-    const contributions = createOpenseBrowserContributions("opense", html, svg);
-    const panel = requiredPanel(contributions);
+    const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+    const panel = requiredPanel({ contributions });
     const context = panelContext(createFakeFiles({ trees: {} }));
 
     expect(panel.id).toBe("workspace.opense");
@@ -70,6 +73,7 @@ describe("bundled OpenSE browser plugin", () => {
     // Browser-only: no provider ownership, so visibility never gates.
     expect(panel.visible?.(context)).toBe(true);
     expect(panel.visible?.(panelContext(createFakeFiles({ trees: {} }), { ...openseWorkspace, id: "workspace-2" }))).toBe(true);
+    expect(panel.invalidationResources).toEqual(["workspace.files"]);
     expect(typeof panel.onInvalidate).toBe("function");
 
     const actions = contributions.actions ?? [];
@@ -414,10 +418,101 @@ describe("bundled OpenSE browser plugin", () => {
 
     render(null, container);
   });
+
+  // W1: manual refresh arrives without an invalidation argument and must keep
+  // the old immediate-parse semantics; a host-supplied manual invalidation
+  // (from `invalidateWorkspaceResources`) does the same.
+  it("keeps the immediate onInvalidate parse with and without an invalidation argument", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
+    const context = panelContext(files);
+
+    // Backward compat: no invalidation argument (the manual Refresh action).
+    await panel.onInvalidate?.(context);
+    expect(files.listCalls).toHaveLength(1);
+
+    // Explicit host-supplied manual invalidation.
+    await panel.onInvalidate?.(context, { reason: "manual", resources: ["workspace.files"] });
+    expect(files.listCalls).toHaveLength(2);
+  });
+
+  // W2: `dispose` releases the whole registry, so a recreate starts from a
+  // cold cache instead of reusing the released workspace report.
+  it("releases every cached workspace on dispose, so a re-render re-parses", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("a.sysml", "a.sysml")]) },
+      reads: { "a.sysml": text("package Alpha;") },
+    });
+    const { contributions, dispose } = createOpenseBrowserContributions("opense", html, svg);
+    const panel = requiredPanel({ contributions });
+    const context = panelContext(files);
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    await renderPanel(panel, context, container);
+    expect(files.listCalls).toHaveLength(1);
+    // Re-rendering without dispose reuses the cached report.
+    await renderPanel(panel, context, container);
+    expect(files.listCalls).toHaveLength(1);
+
+    dispose();
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    expect(files.listCalls).toHaveLength(2);
+
+    render(null, container);
+  });
+
+  // W4a: selecting a row mirrors it into the contribution query so the URL
+  // round-trips (`opense--element=<id>`).
+  it("mirrors the outline selection into the contribution query", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker;") },
+    });
+    const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
+    const { navigation, set } = createFakeNavigation();
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const container = document.createElement("div");
+    document.body.append(container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+
+    button(bodyShadow(container), "Tracker").click();
+    await renderPanel(panel, context, container);
+    expect(set).toHaveBeenCalledWith("element", "Tracker");
+    expect(navigation.query["element"]).toBe("Tracker");
+
+    render(null, container);
+  });
+
+  // W4a: a fresh tab whose URL carries the element query restores that
+  // element in the detail section once the parse lands.
+  it("restores a deep-linked element selection from the navigation query", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::lens" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const container = document.createElement("div");
+    document.body.append(container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+
+    const detail = bodyShadow(container).querySelector<HTMLElement>(".opense-detail");
+    expect(detail?.textContent).toContain("lens");
+
+    render(null, container);
+  });
 });
 
-function requiredPanel(contributions: ReturnType<typeof createOpenseBrowserContributions>) {
-  const panel = contributions.workspacePanels?.[0];
+function requiredPanel(result: { contributions: PluginContributions }) {
+  const panel = result.contributions.workspacePanels?.[0];
   if (panel === undefined) throw new Error("Expected OpenSE workspace panel");
   return panel;
 }
@@ -467,18 +562,9 @@ function panelContext(
   machineId = "local",
   insertText: (text: string) => void = () => undefined,
 ): WorkspacePanelContext {
-  const files = fake.files;
-  const noop = () => undefined;
-  return {
-    machine: { id: machineId, name: machineId, kind: "local" },
-    workspace,
-    state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
-    files,
-    host: { requestRender: noop },
-    navigate: () => Promise.resolve(),
-    prompt: { insertText, getText: () => "", getSelection: () => null },
-    terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
-  };
+  // Plan v4 §0.2: the shared builder in test-support.ts owns the context
+  // shape; this adapter keeps the terse positional call sites in this file.
+  return createPanelContext({ files: fake.files, workspace, machineId, insertText }).context;
 }
 
 function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
