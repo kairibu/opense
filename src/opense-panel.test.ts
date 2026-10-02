@@ -68,7 +68,7 @@ describe("bundled OpenSE browser plugin", () => {
 
     expect(panel.id).toBe("workspace.opense");
     expect(panel.title).toBe("OpenSE");
-    expect(panel.order).toBe(60);
+    expect(panel.order).toBe(7);
     expect(panel.icon).toBeDefined();
     // Browser-only: no provider ownership, so visibility never gates.
     expect(panel.visible?.(context)).toBe(true);

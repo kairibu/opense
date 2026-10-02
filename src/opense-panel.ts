@@ -269,7 +269,10 @@ function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelCon
         <path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path>
       </svg>
     `,
-    order: 60,
+    // Below the Files panel (order 10) and OpenDoor (order 5): the host
+    // resolves file-open / navigation arbitration by panel order, so OpenSE
+    // must sort before Files to win deep links (W4a).
+    order: 7,
     // Browser-only plugins own no workspace provider, so the panel is always
     // visible; the discovery-based empty state carries the "no files" story.
     visible: () => true,

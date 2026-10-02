@@ -55,7 +55,7 @@ describe("bundled OpenSE browser entry", () => {
     // Browser-only plugin: panel is always visible, never ownership-gated.
     expect(panel.id).toBe("workspace.opense");
     expect(panel.title).toBe("OpenSE");
-    expect(panel.order).toBe(60);
+    expect(panel.order).toBe(7);
     expect(panel.icon).toBeDefined();
     expect(panel.visible?.(context)).toBe(true);
     // W1: the panel declares the fixed workspace resource whose automatic
