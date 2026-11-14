@@ -16,6 +16,13 @@
 //                             discovers
 //   pi-web-plugin.js        — bundled entry ("// Generated from …"): wiring +
 //                             panel/palette modules + inlined npm deps
+//   opense-chips.css         — verbatim copy of src/opense-chips.css; the
+//                             `stylesheets` contribution's module-relative
+//                             URL (new URL("./opense-chips.css",
+//                             import.meta.url).href) must resolve next to the
+//                             bundle in the shipped layout, and esbuild
+//                             never emits it (the plugin-api import is
+//                             types-only; no TS module imports CSS)
 //   vendor/sysml-parser.bundle.js — verbatim copy (committed vendor asset);
 //                             kept external so the vendored parser stays
 //                             diffable and is not duplicated into the bundle
@@ -57,6 +64,10 @@ async function buildAll() {
   // so the pi-web catalog can discover the piWeb.plugins entry.
   await mkdir(outDir, { recursive: true });
   await copyFile(resolve(rootDir, "package.json"), resolve(outDir, "package.json"));
+  // The chip stylesheet ships next to the bundle so the `stylesheets`
+  // contribution's module-relative URL resolves in dist/ (see the layout
+  // note above) — the copy is ours, esbuild only bundles the JS entry.
+  await copyFile(resolve(srcDir, "opense-chips.css"), resolve(outDir, "opense-chips.css"));
   await copyDirectory(resolve(srcDir, "vendor"), resolve(outDir, "vendor"));
   console.log(`[opense] bundled ${relative(cwd, entrySource)} into ${relative(cwd, entryOutput)}`);
 }

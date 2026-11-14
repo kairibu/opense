@@ -21,13 +21,17 @@ import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FileContentResponse,
+  MessageActionAvailabilityContextV5,
+  MessageActionContextV5,
   PluginContributionsV5,
+  PluginNavigate,
   PluginRuntimeContext,
   PluginRuntimeContextV5,
   Workspace,
   WorkspacePanelContextV5,
 } from "@jmfederico/pi-web/plugin-api";
 import { createOpenseBrowserContributions } from "./opense-panel.js";
+import { referenceChooserElementTag, type OpenseReferenceChooserElement } from "./opense-panel-chooser.js";
 import type { OpenseActionPaletteElement } from "./opense-panel-palette.js";
 import {
   activityElementTag,
@@ -607,6 +611,273 @@ describe("bundled OpenSE browser plugin", () => {
     render(null, container);
   });
 });
+
+// C2+C4 (plan-v5 §2.C): the chat message action, its availability gates,
+// the run flows (single candidate, missing workspace, chooser for several),
+// and the markdown chip extension's contribution shape.
+describe("OpenSE message action and reference chips", () => {
+  it("contributes the message action and the markdown chip extension", () => {
+    const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+
+    const action = contributions.messageActions?.[0];
+    if (action === undefined) throw new Error("Expected the OpenSE message action");
+    expect(action.id).toBe("chat.open-opense-element");
+    expect(action.title).toBe("Open element in OpenSE");
+    expect(typeof action.visible).toBe("function");
+    expect(typeof action.enabled).toBe("function");
+    expect(typeof action.run).toBe("function");
+
+    const extension = contributions.markdownExtensions?.[0];
+    if (extension === undefined) throw new Error("Expected the OpenSE markdown extension");
+    expect(extension.id).toBe("opense-refs");
+    expect(extension.level).toBe("inline");
+    expect(typeof extension.start).toBe("function");
+    expect(typeof extension.tokenize).toBe("function");
+    expect(typeof extension.render).toBe("function");
+  });
+
+  it("shows the action only for messages carrying reference candidates", () => {
+    const action = requiredMessageAction();
+    const withBacktick = availability("Use `Pkg::Wheel` for that");
+    const withChip = availability("Inspect [[Pkg::Wheel]] please");
+    const without = availability("No references here, just `code` and [[junk]]");
+    expect(action.visible?.(withBacktick)).toBe(true);
+    expect(action.visible?.(withChip)).toBe(true);
+    expect(action.visible?.(without)).toBe(false);
+  });
+
+  it("keeps the action available for archived sessions (enabled stays trivial)", () => {
+    const action = requiredMessageAction();
+    const live = availability("`Pkg::Wheel`");
+    const archived = { ...live, session: { ...live.session, archived: true } };
+    expect(action.enabled?.(live)).toBe(true);
+    expect(action.enabled?.(archived)).toBe(false);
+  });
+
+  it("navigates straight to the panel for a single candidate", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const context = messageActionContext({
+      messageText: "Check `Pkg::Wheel` for the rim",
+      navigate,
+      workspace: openseWorkspace,
+    });
+
+    const feedback = await action.run(context);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(
+      { view: "workspace", tool: "opense:workspace.opense", query: { element: "Pkg::Wheel" } },
+      { mode: "patch" },
+    );
+    expect(feedback).toEqual({
+      title: "Opening Pkg::Wheel in OpenSE",
+      ariaLabel: "Opening Pkg::Wheel in the OpenSE panel",
+    });
+  });
+
+  it("answers a missing workspace with a toast instead of navigating", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const context = messageActionContext({
+      messageText: "Check `Pkg::Wheel`",
+      navigate,
+      workspace: undefined,
+    });
+
+    const feedback = await action.run(context);
+    expect(feedback).toEqual({ title: "Open the element's workspace first" });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("opens a chooser for several candidates; picking navigates, Escape closes", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const context = messageActionContext({
+      messageText: "Compare `Pkg::Wheel` with [[Pkg::Gear]]",
+      navigate,
+      workspace: openseWorkspace,
+    });
+
+    const feedback = await action.run(context);
+    expect(feedback).toEqual({ title: "Choose an element to open in OpenSE" });
+    expect(navigate).not.toHaveBeenCalled();
+
+    const chooser = document.querySelector(referenceChooserElementTag) as OpenseReferenceChooserElement | null;
+    if (chooser === null) throw new Error("Expected the reference chooser overlay");
+    await chooser.updateComplete;
+    const buttons = [...chooser.shadowRoot?.querySelectorAll("button") ?? []];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Pkg::Wheel", "Pkg::Gear"]);
+
+    // Picking a row removes the chooser and navigates with that candidate.
+    buttons[1]?.click();
+    await settle();
+    expect(document.querySelector(referenceChooserElementTag)).toBeNull();
+    expect(navigate).toHaveBeenCalledWith(
+      { view: "workspace", tool: "opense:workspace.opense", query: { element: "Pkg::Gear" } },
+      { mode: "patch" },
+    );
+  });
+
+  it("closes the chooser on Escape and on backdrop click without navigating", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const context = messageActionContext({
+      messageText: "Compare `Pkg::Wheel` with `Pkg::Gear`",
+      navigate,
+      workspace: openseWorkspace,
+    });
+
+    await action.run(messageActionContext({ messageText: "`Pkg::Wheel`", navigate, workspace: openseWorkspace }));
+    // (single candidate — instant navigate, no chooser)
+    expect(navigate).toHaveBeenCalledTimes(1);
+
+    await action.run(context);
+    let chooser = document.querySelector(referenceChooserElementTag) as OpenseReferenceChooserElement | null;
+    if (chooser === null) throw new Error("Expected the reference chooser overlay");
+    await chooser.updateComplete;
+
+    // Escape anywhere closes without a pick.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(document.querySelector(referenceChooserElementTag)).toBeNull();
+    expect(navigate).toHaveBeenCalledTimes(1);
+
+    // Reopened: a backdrop click closes the same way.
+    await action.run(context);
+    chooser = document.querySelector(referenceChooserElementTag) as OpenseReferenceChooserElement | null;
+    if (chooser === null) throw new Error("Expected the reference chooser overlay");
+    await chooser.updateComplete;
+    const backdrop = chooser.shadowRoot?.querySelector(".opense-chooser-backdrop");
+    if (backdrop === null || backdrop === undefined) throw new Error("Expected the chooser backdrop");
+    backdrop.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: false }));
+    expect(document.querySelector(referenceChooserElementTag)).toBeNull();
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("contributes the reference-chip stylesheet (the sanitizer strips inline styles)", () => {
+    const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+    // C4/D3: the `.opense-ref` chip renders through a contributed CSS file,
+    // declared with a module-relative URL that resolves in both the src/
+    // tree and the shipped dist/ layout (the build copies the file next to
+    // pi-web-plugin.js — scripts/build-plugin.mjs).
+    const sheets = contributions.stylesheets;
+    expect(sheets).toHaveLength(1);
+    const sheet = sheets?.[0];
+    if (sheet === undefined) throw new Error("Expected the OpenSE chip stylesheet");
+    expect(sheet.id).toBe("opense-chips");
+    expect(sheet.url).toBe(new URL("./opense-chips.css", import.meta.url).href);
+  });
+
+  it("keeps one overlay: a second chooser open closes the first", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const first = messageActionContext({
+      messageText: "Compare `Pkg::Wheel` with `Pkg::Gear`",
+      navigate,
+      workspace: openseWorkspace,
+    });
+    const second = messageActionContext({
+      messageText: "Compare `Pkg::Rim` with `Pkg::Spoke`",
+      navigate,
+      workspace: openseWorkspace,
+    });
+
+    await action.run(first);
+    const firstChooser = document.querySelector(referenceChooserElementTag);
+    if (firstChooser === null) throw new Error("Expected the first reference chooser overlay");
+    await action.run(second);
+    // Exactly one overlay remains — the newest (fresh rows), not a second
+    // backdrop stacked over the first.
+    expect(document.querySelectorAll(referenceChooserElementTag)).toHaveLength(1);
+    const chooser = document.querySelector(referenceChooserElementTag) as OpenseReferenceChooserElement;
+    expect(chooser).not.toBe(firstChooser);
+    await chooser.updateComplete;
+    const buttons = [...chooser.shadowRoot?.querySelectorAll("button") ?? []];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Pkg::Rim", "Pkg::Spoke"]);
+  });
+
+  it("closes an open chooser overlay on activation dispose", async () => {
+    const activation = createOpenseBrowserContributions("opense", html, svg);
+    const action = activation.contributions.messageActions?.[0];
+    if (action === undefined) throw new Error("Expected the OpenSE message action");
+    const context = messageActionContext({
+      messageText: "Compare `Pkg::Wheel` with `Pkg::Gear`",
+      navigate: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+      workspace: openseWorkspace,
+    });
+
+    await action.run(context);
+    expect(document.querySelector(referenceChooserElementTag)).not.toBeNull();
+    // The activation dispose drops an open overlay before releasing the
+    // registry, so a later pick can never navigate through controllers the
+    // release already aborted.
+    activation.dispose();
+    expect(document.querySelector(referenceChooserElementTag)).toBeNull();
+  });
+
+  it("swallows a rejecting pick navigation instead of an unhandled rejection", async () => {
+    const action = requiredMessageAction();
+    const navigate = vi.fn<() => Promise<void>>(() => Promise.reject(new Error("navigation refused")));
+    const context = messageActionContext({
+      messageText: "Compare `Pkg::Wheel` with `Pkg::Gear`",
+      navigate,
+      workspace: openseWorkspace,
+    });
+
+    await action.run(context);
+    const chooser = document.querySelector(referenceChooserElementTag) as OpenseReferenceChooserElement | null;
+    if (chooser === null) throw new Error("Expected the reference chooser overlay");
+    await chooser.updateComplete;
+    const buttons = [...chooser.shadowRoot?.querySelectorAll("button") ?? []];
+    // The pick still closes the overlay; the rejected navigation is caught
+    // (the chooser is gone — nothing is left to report on) and the run
+    // never leaves an unhandled rejection behind.
+    buttons[0]?.click();
+    await settle();
+    expect(document.querySelector(referenceChooserElementTag)).toBeNull();
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+});
+
+function requiredMessageAction() {
+  const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+  const action = contributions.messageActions?.[0];
+  if (action === undefined) throw new Error("Expected the OpenSE message action");
+  return action;
+}
+
+/** Minimal `MessageActionAvailabilityContextV5` for the sync gates. */
+function availability(messageText: string): MessageActionAvailabilityContextV5 {
+  return {
+    machine: { id: "local", name: "local", kind: "local" },
+    session: { id: "session-1", cwd: "/repo", archived: false, pending: false, busy: false },
+    message: { entryId: "entry-1", role: "assistant", text: messageText },
+  };
+}
+
+interface MessageActionContextOptions {
+  messageText?: string;
+  navigate?: () => Promise<void>;
+  /** The run context's optional workspace; undefined models the host not
+ *  supplying one (message action run cannot assume a selected workspace). */
+  workspace: Workspace | undefined;
+}
+
+/** Minimal `MessageActionContextV5` for `run`: the availability fields plus
+ *  the run-context helpers (prompt, projects, history, catalog). */
+function messageActionContext(options: MessageActionContextOptions): MessageActionContextV5 {
+  const noop = () => undefined;
+  const notImplemented = () => Promise.reject(new Error("not implemented"));
+  const base = availability(options.messageText ?? "");
+  return {
+    ...base,
+    prompt: { insertText: noop, getText: () => "", getSelection: () => null },
+    navigate: (options.navigate ?? (() => Promise.resolve())) as PluginNavigate,
+    projects: { machineId: "local", listProjects: () => Promise.resolve([]), suggestDirectories: () => Promise.resolve([]) },
+    ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
+    catalog: createFakeCatalog(),
+    history: { fork: notImplemented, goBack: notImplemented },
+  };
+}
 
 function requiredPanel(result: { contributions: PluginContributionsV5 }) {
   const panel = result.contributions.workspacePanels?.[0];

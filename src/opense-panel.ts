@@ -45,6 +45,10 @@
 
 import type {
   HtmlTemplateTag,
+  MessageActionAvailabilityContextV5,
+  MessageActionContributionV5,
+  MessageActionContextV5,
+  MessageActionFeedback,
   PluginActionV5,
   PluginContributionsV5,
   PluginRuntimeContext,
@@ -61,7 +65,14 @@ import { openseReportFromWorkspace } from "./opense-contract.js";
 import type { OpenseDiscoveryFiles, OpenseDiscoveryRequestOptions } from "./opense-discovery.js";
 import { discoverOpenseFiles } from "./opense-discovery.js";
 import { outlineRows } from "./opense-outline.js";
+import { openseReferenceChipExtension } from "./opense-panel-chips.js";
+import {
+  closeOpenseReferenceChooser,
+  defineOpenseReferenceChooserElement,
+  openOpenseReferenceChooser,
+} from "./opense-panel-chooser.js";
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
+import { openseReferenceCandidates } from "./opense-references.js";
 import { defineOpensePanelElements } from "./opense-panel-elements.js";
 import { openseClaimsSysmlLinks, setOpenseClaimsSysmlLinks } from "./opense-preferences.js";
 import { OpenseWorkspaceController, type OpenseWorkspaceHost } from "./opense-panel-controller.js";
@@ -144,12 +155,36 @@ export function createOpenseBrowserContributions(
   const registry = new OpenseWorkspaceRegistry();
   defineOpensePanelElements();
   defineOpenseActionPaletteElement();
+  defineOpenseReferenceChooserElement();
   return {
     contributions: {
       actions: createOpenseActions(panelId),
+      // C2: the chat message action resolving element references; C4: the
+      // `[[Pkg::Wheel]]` markdown chip extension. Both share the extraction
+      // grammar through opense-references.ts.
+      messageActions: [createOpenseElementAction(panelId)],
+      markdownExtensions: [openseReferenceChipExtension],
+      // C4/D3: the reference-chip stylesheet. The host sanitizer strips
+      // inline styles from extension output, so the `.opense-ref` chip is
+      // styled through a contributed CSS file (the host's documented
+      // mechanism), reached with a module-relative URL that resolves in
+      // both the src/ tree and the shipped dist/ layout (the build script
+      // copies the file next to pi-web-plugin.js; esbuild never emits it —
+      // the plugin-api import is types-only and no TS module imports CSS).
+      stylesheets: [{
+        id: "opense-chips",
+        url: new URL("./opense-chips.css", import.meta.url).href,
+      }],
       workspacePanels: [createOpensePanel(registry)],
     },
-    dispose: () => { registry.release(); },
+    dispose: () => {
+      // C2 lifecycle: an open reference-chooser overlay (opened by the
+      // message action) must not outlive the activation — close it BEFORE
+      // the registry release frees the workspace controllers its picks
+      // navigate through.
+      closeOpenseReferenceChooser();
+      registry.release();
+    },
   };
 }
 
@@ -271,6 +306,93 @@ function createOpenseActions(panelId: string): PluginActionV5[] {
       run: () => { setOpenseClaimsSysmlLinks(!openseClaimsSysmlLinks()); },
     },
   ];
+}
+
+/**
+ * C2 (plan-v5 §2.C): the "Open element in OpenSE" chat message action.
+ * Detects qualified-name candidates in the message text (backticked spans
+ * and `[[...]]` chips, via opense-references.ts), navigates the workspace
+ * view to THIS panel with the picked candidate in the contribution-scoped
+ * `element` query key, and lets the controller's deep-link restore step do
+ * the resolving (exact row id → normalized qualified name → not-found
+ * notice, opense-panel-controller.ts).
+ *
+ * Registry note (plan adaptation): the plan drafts the action closing over
+ * the workspace registry, but `run` needs none of it — `context.navigate`
+ * reaches the panel through the host, the panel parses on navigation, and
+ * the registry instance is the same one the panel renders through. So the
+ * action deliberately closes over the panel id only; there is no second
+ * parse path.
+ *
+ * Enabled-context adaptation (verified against plugin-api.d.ts):
+ * `MessageActionAvailabilityContextV5` carries machine/session/message but
+ * NO `workspace` — the plan's `enabled({ workspace })` is not implementable
+ * (workspace exists only on the run context). `enabled` therefore stays
+ * trivial — an archived session cannot host the follow-up panel — and the
+ * workspace check moved into `run`, which answers a missing workspace with
+ * the ~1.2 s host toast "Open the element's workspace first" instead of
+ * navigating.
+ */
+function createOpenseElementAction(panelId: string): MessageActionContributionV5 {
+  return {
+    id: "chat.open-opense-element",
+    title: "Open element in OpenSE",
+    // Pure sync, as the availability contract requires: extraction is
+    // string scanning with a 50-candidate cap.
+    visible: ({ message }: MessageActionAvailabilityContextV5) =>
+      openseReferenceCandidates(message.text).length > 0,
+    enabled: ({ session }: MessageActionAvailabilityContextV5) => !session.archived,
+    run: async (context: MessageActionContextV5) => {
+      const candidates = openseReferenceCandidates(context.message.text);
+      // `visible` gates this path; the re-check is a defensive no-op.
+      if (candidates.length === 0) return undefined;
+      // Plan adaptation (see the function comment): the workspace lives only
+      // on the run context, so its absence is answered here, not in `enabled`.
+      if (context.workspace === undefined) {
+        return { title: "Open the element's workspace first" } satisfies MessageActionFeedback;
+      }
+      if (candidates.length === 1) {
+        return navigateToOpenseElement(context, panelId, candidates[0] ?? "");
+      }
+      // Several candidates: chooser overlay in the chat (a dedicated tiny
+      // element, not the panel's action palette — see opense-panel-chooser.ts).
+      // The pick navigates through this same captured context; the run itself
+      // reports the chooser, since the pick's navigation cannot return
+      // feedback through this promise.
+      openOpenseReferenceChooser({
+        candidates,
+        onPick: (candidate: string) => {
+          // The chooser is closed before this navigation settles, so no
+          // overlay remains to surface a rejection on, and this plugin
+          // keeps no runtime console surface (the host chat reports its
+          // own navigation failures) — hence the deliberate silent catch
+          // instead of an unhandled rejection.
+          void navigateToOpenseElement(context, panelId, candidate)
+            .catch(() => undefined);
+        },
+      });
+      return { title: "Choose an element to open in OpenSE" } satisfies MessageActionFeedback;
+    },
+  };
+}
+
+/**
+ * Navigate to the OpenSE panel with `candidate` in the `element` query key.
+ * Patch mode keeps machine/project/workspace/session on the URL — the chat
+ * stays where it is while the workspace view opens behind it — and the key
+ * lands in the panel's contribution-query namespace, exactly where the
+ * controller's restore step resolves it.
+ */
+async function navigateToOpenseElement(
+  context: MessageActionContextV5,
+  panelId: string,
+  candidate: string,
+): Promise<MessageActionFeedback> {
+  await context.navigate(
+    { view: "workspace", tool: panelId, query: { element: candidate } },
+    { mode: "patch" },
+  );
+  return { title: `Opening ${candidate} in OpenSE`, ariaLabel: `Opening ${candidate} in the OpenSE panel` };
 }
 
 function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelContributionV5 {

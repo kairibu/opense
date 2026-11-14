@@ -48,6 +48,19 @@ The "Open .sysml links" toggle (OpenSE palette action) is a
 offers no settings context for browser-only plugins. Global enable/disable
 remains available via **Settings → PI WEB plugins**.
 
+## Reference chips in chat
+
+Agents and users may write `[[Pkg::Wheel]]` in chat messages to point at
+SysML elements worth inspecting: the chip renders as a small styled badge
+(non-interactive — the host sanitizer strips links and handlers from plugin
+markdown), and the message's **Open element in OpenSE** action opens the
+element's detail pane in the workspace panel. A plain backticked
+`` `Pkg::Wheel` `` works through the same action without the chip rendering.
+When a message mentions several elements, the action opens a small chooser
+overlay; a miss (the element is not in the current model) lands on an
+honest "was not found in the current model" notice instead of a silent
+no-op.
+
 ## Development
 
 ### Structure
@@ -55,9 +68,16 @@ remains available via **Settings → PI WEB plugins**.
 All sources live under `src/`.
 
 - `src/pi-web-plugin.ts` — browser entry point; default-exports the
-  `PiWebPlugin` activation descriptor (apiVersion 4)
+  `PiWebPlugin` activation descriptor (apiVersion 5)
 - `src/opense-panel.ts` — panel UI and contributions factory (lit custom
-  elements; drives the parse on connect)
+  elements; drives the parse on connect), including the "Open element in
+  OpenSE" chat message action (C2)
+- `src/opense-references.ts` — pure extraction of element references from
+  chat text (backticked spans + `[[...]]` chips; shared chip grammar)
+- `src/opense-panel-chips.ts` — the `[[Pkg::Wheel]]` markdown extension
+  (reference chips in chat and Markdown previews, C4)
+- `src/opense-panel-chooser.ts` — the chat-side candidate chooser overlay
+  opened by the message action when a message carries several references
 - `src/opense-panel-palette.ts` — action palette below the element details
   (custom element: Investigate, Task, and Copy name insert prompts
   into the session prompt editor)

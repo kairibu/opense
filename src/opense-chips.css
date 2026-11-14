@@ -1,0 +1,25 @@
+/* ---------------------------------------------------------------------------
+ * OpenSE reference chips (C4, plan-v5 §2.C decision D3): the host-rendered
+ * `.opense-ref` span emitted by the `opense-refs` markdown extension
+ * (src/opense-panel-chips.ts) in chat transcripts and Markdown previews.
+ *
+ * The host sanitizer strips inline styles from extension output, so the
+ * chip is styled through THIS contributed CSS file instead — the browser
+ * API v5 `stylesheets` contribution (docs/plugins.md, "CSS files and
+ * shadow roots") declares it from src/opense-panel.ts with a module-relative
+ * URL, and scripts/build-plugin.mjs copies this file next to
+ * dist/pi-web-plugin.js so that URL resolves in the shipped layout.
+ *
+ * One class only: the plugin's own chooser/panel elements are Lit
+ * components that style themselves through shadow-scoped `static styles`,
+ * so nothing of theirs belongs here. Colors ride the host theme's `--pi-*`
+ * custom properties, with fallbacks for older hosts.
+ * ------------------------------------------------------------------------- */
+
+.opense-ref {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border: 1px solid var(--pi-accent-border, var(--pi-border));
+  color: var(--pi-accent, var(--pi-text));
+  border-radius: 5px;
+  padding: 0 5px;
+}

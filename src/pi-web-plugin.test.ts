@@ -68,6 +68,23 @@ describe("bundled OpenSE browser entry", () => {
     expect(typeof panel.render).toBe("function");
 
     expect(contributions.actions?.map(({ id }) => id)).toEqual(["view.opense", "workspace.refresh-opense", "opense.claim-sysml-links"]);
+
+    // C2: the chat message action is present with the entry shape.
+    const messageAction = contributions.messageActions?.[0];
+    if (messageAction === undefined) throw new Error("Expected the OpenSE message action");
+    expect(messageAction.id).toBe("chat.open-opense-element");
+    expect(messageAction.title).toBe("Open element in OpenSE");
+    expect(typeof messageAction.visible).toBe("function");
+    expect(typeof messageAction.run).toBe("function");
+
+    // C4: the `[[Pkg::Wheel]]` reference-chip markdown extension is present.
+    const markdownExtension = contributions.markdownExtensions?.[0];
+    if (markdownExtension === undefined) throw new Error("Expected the OpenSE markdown extension");
+    expect(markdownExtension.id).toBe("opense-refs");
+    expect(markdownExtension.level).toBe("inline");
+    expect(typeof markdownExtension.start).toBe("function");
+    expect(typeof markdownExtension.tokenize).toBe("function");
+    expect(typeof markdownExtension.render).toBe("function");
   });
 
   // W2: the activation result carries `dispose`, which releases the
