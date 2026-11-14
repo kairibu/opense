@@ -34,6 +34,15 @@ ln -s ./dist ~/.pi-web/plugins/opense
 
 pi-web then discovers and serves the plugin.
 
+### Installing from npm
+
+Once published, the package is installable through **Settings → Pi packages**
+by name. Community discovery on [pi-web.dev/community-plugins](https://pi-web.dev/community-plugins)
+requires the `pi-web.dev-plugin` npm keyword, which this package declares in
+`package.json` (alongside `pi-web`, `sysml`, `sysml-v2`, `mbse`). The peer
+dependency `@jmfederico/pi-web >= 1.202611.1` documents the supported host
+range.
+
 ## Development
 
 ### Structure
