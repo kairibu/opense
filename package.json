@@ -1,6 +1,6 @@
 {
   "name": "opense-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "OpenSE — a pi-web browser plugin that parses SysML v2 models in the workspace and renders diagnostics, outline, and element details (vendored sysml-parser bundle).",
   "type": "module",

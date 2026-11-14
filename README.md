@@ -127,6 +127,8 @@ All sources live under `src/`.
   chat text (backticked spans + `[[...]]` chips; shared chip grammar)
 - `src/opense-panel-chips.ts` — the `[[Pkg::Wheel]]` markdown extension
   (reference chips in chat and Markdown previews, C4)
+- `src/opense-chips.css` — the chip stylesheet, shipped next to the bundle
+  (`dist/opense-chips.css`) and wired through the `stylesheets` contribution
 - `src/opense-panel-chooser.ts` — the chat-side candidate chooser overlay
   opened by the message action when a message carries several references
 - `src/opense-panel-palette.ts` — action palette below the element details
