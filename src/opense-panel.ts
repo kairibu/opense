@@ -16,6 +16,10 @@
 // (opense-contract + opense-outline). `context.files` is the only boundary;
 // there is no `context.backend` anywhere in this module (plan §3.4).
 //
+// Contribution shapes use the v5 plugin API (plan-v5 §2.A): Omit-based
+// supersets of their v4 counterparts with discovery-augmented callback
+// inputs, which the callbacks below ignore (type-level migration only).
+//
 // Plan note: plan-opense-plugin.md's "syside" references (its syside-panel /
 // syside-contract template and actions) have no counterpart in this
 // repository — the plan's syside idioms map onto the in-tree git-panel
@@ -41,13 +45,13 @@
 
 import type {
   HtmlTemplateTag,
-  PluginAction,
-  PluginContributions,
+  PluginActionV5,
+  PluginContributionsV5,
   PluginRuntimeContext,
   SvgTemplateTag,
   WorkspaceInvalidation,
   WorkspacePanelContext,
-  WorkspacePanelContribution,
+  WorkspacePanelContributionV5,
 } from "@jmfederico/pi-web/plugin-api";
 import { html, svg } from "lit";
 import type { ModelIndex, Workspace as ParserWorkspace } from "./vendor/sysml-parser.bundle.js";
@@ -110,7 +114,7 @@ export async function parseOpenseWorkspace(
 /** Browser contribution factory result (W2): the contributions plus the
  *  activation-result `dispose` that releases the per-workspace registry. */
 export interface OpenseBrowserContributions {
-  contributions: PluginContributions;
+  contributions: PluginContributionsV5;
   /** Release every cached per-workspace controller (host dispose/rollback). */
   dispose: () => void;
 }
@@ -222,7 +226,7 @@ class OpensePanelHost implements OpenseWorkspaceHost {
   isConnected = false;
 }
 
-function createOpenseActions(panelId: string): PluginAction[] {
+function createOpenseActions(panelId: string): PluginActionV5[] {
   return [
     {
       id: "view.opense",
@@ -253,7 +257,7 @@ function createOpenseActions(panelId: string): PluginAction[] {
   ];
 }
 
-function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelContribution {
+function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelContributionV5 {
   return {
     id: OPENSE_PANEL_LOCAL_ID,
     title: "OpenSE",

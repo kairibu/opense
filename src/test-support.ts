@@ -27,15 +27,17 @@ import type {
   FileContentResponse,
   FileTreeEntry,
   FileTreeResponse,
-  PiWebPlugin,
-  PluginActivationContext,
-  PluginActivationResult,
+  PiWebPluginV5,
+  PluginActivationContextV5,
+  PluginActivationResultV5,
+  PluginCatalog,
+  PluginRuntimeContextV5,
   Workspace,
   WorkspaceFileRequestOptions,
   WorkspaceFiles,
   WorkspaceFilesCapabilityV1,
   WorkspaceFilesContextValue,
-  WorkspacePanelContext,
+  WorkspacePanelContextV5,
   WorkspacePanelNavigationV1,
 } from "@jmfederico/pi-web/plugin-api";
 import type { OpenseWorkspaceHost } from "./opense-panel-controller.js";
@@ -195,6 +197,24 @@ export const testWorkspace: Workspace = {
   isMain: true,
 };
 
+/** Discovery-context fixture (v5 migration): a stub `PluginCatalog` for the
+ *  `catalog` member the v5 callback contexts require. OpenSE's callbacks
+ *  ignore it, so only the captured `machineId` is meaningful (matches the
+ *  fixture machine). The `list` methods resolve empty results (inert,
+ *  realistic "no data" that avoids unhandled-rejection pitfalls), while the
+ *  `get` methods reject — so an accidental future read either sees "no
+ *  data" or fails loudly. */
+export function createFakeCatalog(machineId = "local"): PluginCatalog {
+  const notImplemented = () => Promise.reject(new Error("not implemented"));
+  return {
+    machineId,
+    version: 1,
+    projects: { list: () => Promise.resolve([]), get: () => notImplemented() },
+    workspaces: { list: () => Promise.resolve([]), get: () => notImplemented() },
+    sessions: { list: () => Promise.resolve([]), get: () => notImplemented() },
+  };
+}
+
 export interface PanelContextOptions {
   workspace?: Workspace;
   machineId?: string;
@@ -204,14 +224,17 @@ export interface PanelContextOptions {
 }
 
 export interface PanelContextFixture {
-  context: WorkspacePanelContext;
+  context: WorkspacePanelContextV5;
   /** Render-notification spy (the context host the controller routes through). */
   requestRender: Mock<() => void>;
 }
 
 /**
  * One `WorkspacePanelContext` fixture (plan v4 §0.2), shared by the panel,
- * controller, element and entry tests. Defaults: `testWorkspace`, machine
+ * controller, element and entry tests. Typed as the v5 context so it can be
+ * passed to the v5 panel callbacks (`visible`/`render`/`onInvalidate`); the
+ * only v5 addition is the discovery `catalog` stub, which the plugin
+ * ignores. Defaults: `testWorkspace`, machine
  * "local", an empty in-memory files fake, a no-op prompt editor, and no
  * `navigation` (legacy host). Callers pass their own `files` fake,
  * workspace, `insertText` spy and/or `navigation` fake as needed.
@@ -221,12 +244,13 @@ export function createPanelContext(options: PanelContextOptions = {}): PanelCont
   const machineId = options.machineId ?? "local";
   const requestRender = vi.fn<() => void>();
   const insertText = options.insertText ?? (() => undefined);
-  const context: WorkspacePanelContext = {
+  const context: WorkspacePanelContextV5 = {
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace,
     state: { selectedWorkspace: workspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
     files: options.files ?? createFakeFiles().files,
     host: { requestRender },
+    catalog: createFakeCatalog(machineId),
     navigate: () => Promise.resolve(),
     prompt: { insertText, getText: () => "", getSelection: () => null },
     terminal: { open: () => undefined, runCommand: () => Promise.reject(new Error("not implemented")) },
@@ -296,12 +320,12 @@ export function createFakeNavigation(options: FakeNavigationOptions = {}): FakeN
  * bundled plugin must pass that plugin's ids explicitly.
  */
 export function activatePlugin(
-  plugin: PiWebPlugin,
+  plugin: PiWebPluginV5,
   runtimePluginId = "opense",
   pluginId = "opense",
-): PluginActivationResult {
-  const context: PluginActivationContext = {
-    apiVersion: 4,
+): PluginActivationResultV5 {
+  const context: PluginActivationContextV5 = {
+    apiVersion: 5,
     pluginId,
     runtimePluginId,
     html,

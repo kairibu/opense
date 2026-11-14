@@ -11,9 +11,9 @@
 // opense-panel.test.ts.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntimeContext, Workspace } from "@jmfederico/pi-web/plugin-api";
+import type { PluginRuntimeContext, PluginRuntimeContextV5, Workspace } from "@jmfederico/pi-web/plugin-api";
 import plugin from "./pi-web-plugin.js";
-import { activatePlugin, createPanelContext } from "./test-support.js";
+import { activatePlugin, createFakeCatalog, createPanelContext } from "./test-support.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
@@ -36,18 +36,21 @@ describe("bundled OpenSE browser entry", () => {
   // fails this predicate is rejected by the host before activation, so it
   // must fail fast in CI instead of reaching a deployment.
   it("passes the host's browser-plugin load-time guard", () => {
-    expect(plugin.apiVersion).toBe(4);
+    expect(plugin.apiVersion).toBe(5);
     expect(typeof plugin.name).toBe("string");
     expect(plugin.name.length).toBeGreaterThan(0);
     expect(typeof plugin.activate).toBe("function");
   });
 
   it("exports the host-expected plugin shape and contributes the panel and both actions", () => {
-    expect(plugin.apiVersion).toBe(4);
+    expect(plugin.apiVersion).toBe(5);
     expect(plugin.name).toBe("OpenSE");
     expect(typeof plugin.activate).toBe("function");
 
-    const { contributions } = activate("opense");
+    const { contributions, dispose } = activate("opense");
+    // v5 keeps the activation-result `dispose` (W2): the result shape must
+    // still carry it alongside the contributions.
+    expect(typeof dispose).toBe("function");
     const panel = contributions.workspacePanels?.[0];
     if (panel === undefined) throw new Error("Expected OpenSE workspace panel");
     const context = createPanelContext().context;
@@ -107,10 +110,11 @@ function activate(runtimePluginId: string) {
   return activatePlugin(plugin, runtimePluginId);
 }
 
-function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
+function runtimeContext(patch: Partial<PluginRuntimeContextV5> = {}): PluginRuntimeContextV5 {
   const noop = () => undefined;
   return {
     state: { selectedWorkspace: openseWorkspace, workspaceTool: "opense:workspace.opense", mainView: "workspace" },
+    catalog: createFakeCatalog(),
     navigate: () => Promise.resolve(),
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     openActionPalette: noop,
