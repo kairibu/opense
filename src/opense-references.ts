@@ -48,6 +48,8 @@
 // only string scanning — so it is testable in node and bundles anywhere.
 // The chip half of the grammar lives here as `parseOpenseChip` so C2's
 // extraction and C4's tokenizer share ONE parser and cannot drift.
+// `isDispatchableOpenseSubject` is the dispatch-side single-token rule the
+// prompt composers check before composing a `/opense-…` command line.
 // ---------------------------------------------------------------------------
 
 /** Maximum number of candidates `openseReferenceCandidates` returns. */
@@ -103,6 +105,30 @@ export function isQualifiedOpenseName(text: string): boolean {
     return false;
   }
   return true;
+}
+
+/** Any whitespace character: the extension's command parse splits the
+ *  element off as the FIRST whitespace-delimited token, so whitespace is
+ *  the one character class a composed command line cannot carry. */
+const WHITESPACE = /\s/u;
+
+/**
+ * Can a palette element subject ride a composed `/opense-…` dispatch
+ * command line as the element? The extension's parse rule takes the FIRST
+ * whitespace-delimited token after the command name as the element, so only
+ * a WHITESPACE-FREE subject round-trips: a subject whose quoted segment
+ * carries an inner space (`Tracker::'needs focus'`) would truncate at the
+ * space, and the strict session-metadata builder would refuse the fragment
+ * — the dispatch would report an invalid element and start nothing. The
+ * prompt composers check this and keep such a subject on the bare
+ * instruction (the inline fallback survives in the current session), so
+ * the quoted-name limitation applies only to a MANUALLY typed command.
+ * Pure by construction: one string scan, no grammar beyond whitespace —
+ * the builder's remaining rules (qualified-name shape, length bound)
+ * still apply at dispatch time.
+ */
+export function isDispatchableOpenseSubject(subject: string): boolean {
+  return subject !== "" && !WHITESPACE.test(subject);
 }
 
 /**

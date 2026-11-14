@@ -203,7 +203,8 @@ describe("bundled OpenSE browser plugin", () => {
     expect(insertText).toHaveBeenCalledWith("Tracker::Parts::lens");
     palette.shadowRoot?.querySelector<HTMLButtonElement>(".palette-investigate")?.click();
     expect(insertText).toHaveBeenCalledWith(
-      "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements. The element is located in model/good.sysml",
+      "/opense-investigate Tracker::Parts::lens\n" +
+        "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements. The element is located in model/good.sysml",
     );
 
     // The Parse button re-runs the job; onInvalidate re-runs it too.
@@ -634,6 +635,18 @@ describe("OpenSE message action and reference chips", () => {
     expect(typeof extension.start).toBe("function");
     expect(typeof extension.tokenize).toBe("function");
     expect(typeof extension.render).toBe("function");
+  });
+
+  it("contributes the session label for dispatched OpenSE sessions (E4)", () => {
+    const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+
+    const label = contributions.sessionLabels?.[0];
+    if (label === undefined) throw new Error("Expected the OpenSE session label");
+    expect(label.id).toBe("opense.element");
+    expect(label.order).toBe(10);
+    expect(typeof label.items).toBe("function");
+    // No `visible` gate: absent metadata already yields no items.
+    expect(label.visible).toBeUndefined();
   });
 
   it("shows the action only for messages carrying reference candidates", () => {

@@ -11,6 +11,8 @@
 // opense-panel.test.ts.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PluginRuntimeContext, PluginRuntimeContextV5, Workspace } from "@jmfederico/pi-web/plugin-api";
 import plugin from "./pi-web-plugin.js";
 import { activatePlugin, createFakeCatalog, createPanelContext } from "./test-support.js";
@@ -85,6 +87,30 @@ describe("bundled OpenSE browser entry", () => {
     expect(typeof markdownExtension.start).toBe("function");
     expect(typeof markdownExtension.tokenize).toBe("function");
     expect(typeof markdownExtension.render).toBe("function");
+
+    // E4: the session-list row label for dispatched investigate/task
+    // sessions is present with the reviewed id/order.
+    const sessionLabel = contributions.sessionLabels?.[0];
+    if (sessionLabel === undefined) throw new Error("Expected the OpenSE session label");
+    expect(sessionLabel.id).toBe("opense.element");
+    expect(sessionLabel.order).toBe(10);
+    expect(typeof sessionLabel.items).toBe("function");
+  });
+
+  it("declares the Pi extension and the pi-package keyword in the package manifest (E1)", () => {
+    // happy-dom rewrites import.meta.url to an http scheme, so the manifest
+    // is read through the process cwd (vitest runs from the package root).
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+      pi?: { extensions?: string[] };
+      keywords?: string[];
+    };
+    // The package ships a Pi extension (the /opense-investigate and
+    // /opense-task dispatch commands) — package-root-relative, resolved by
+    // Pi's package manager against the installed package root. No
+    // `serverModule`/`machineSpecific`: OpenSE stays browser-entry +
+    // extension (opendoor pattern, E-D1').
+    expect(manifest.pi?.extensions).toEqual(["./dist/pi-extension/index.js"]);
+    expect(manifest.keywords).toContain("pi-package");
   });
 
   // W2: the activation result carries `dispose`, which releases the

@@ -74,6 +74,7 @@ import {
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
 import { openseReferenceCandidates } from "./opense-references.js";
 import { defineOpensePanelElements } from "./opense-panel-elements.js";
+import { createOpenseSessionLabel } from "./opense-session-labels.js";
 import { openseClaimsSysmlLinks, setOpenseClaimsSysmlLinks } from "./opense-preferences.js";
 import { OpenseWorkspaceController, type OpenseWorkspaceHost } from "./opense-panel-controller.js";
 
@@ -164,6 +165,11 @@ export function createOpenseBrowserContributions(
       // grammar through opense-references.ts.
       messageActions: [createOpenseElementAction(panelId)],
       markdownExtensions: [openseReferenceChipExtension],
+      // E4: the session-list row label for dispatched investigate/task
+      // sessions (reopen deep link + pin/archive/restore lifecycle buttons),
+      // built from the same runtimePluginId so the qualified panel tool id
+      // matches the panel contribution above.
+      sessionLabels: [createOpenseSessionLabel(runtimePluginId)],
       // C4/D3: the reference-chip stylesheet. The host sanitizer strips
       // inline styles from extension output, so the `.opense-ref` chip is
       // styled through a contributed CSS file (the host's documented

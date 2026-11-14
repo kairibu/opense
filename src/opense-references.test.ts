@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OPENSE_REFERENCE_CANDIDATE_LIMIT,
+  isDispatchableOpenseSubject,
   isQualifiedOpenseName,
   openseReferenceCandidates,
   openseReferenceLabel,
@@ -170,5 +171,22 @@ describe("isQualifiedOpenseName", () => {
     // pieces fail both segment shapes (conservative by construction).
     expect(isQualifiedOpenseName("Pkg::'a::b'")).toBe(false);
     expect(isQualifiedOpenseName(" Pkg::Wheel ")).toBe(true);
+  });
+});
+
+describe("isDispatchableOpenseSubject", () => {
+  it("accepts only a whitespace-free subject (what the dispatch command's first-token parse can carry)", () => {
+    expect(isDispatchableOpenseSubject("Pkg::Wheel")).toBe(true);
+    // A quoted segment WITHOUT inner whitespace is still one token.
+    expect(isDispatchableOpenseSubject("Pkg::Wheel::rim::'deep-span'")).toBe(true);
+    // A quoted segment WITH an inner space is a qualified name but not one
+    // token — the composed command line could not round-trip the extension's
+    // first-token parse (the composers must fall back to the bare
+    // instruction for it).
+    expect(isDispatchableOpenseSubject("Tracker::'needs focus'")).toBe(false);
+    expect(isDispatchableOpenseSubject("Pkg::Wheel rim")).toBe(false);
+    expect(isDispatchableOpenseSubject(" Pkg::Wheel ")).toBe(false);
+    expect(isDispatchableOpenseSubject("Pkg::Wheel\n")).toBe(false);
+    expect(isDispatchableOpenseSubject("")).toBe(false);
   });
 });

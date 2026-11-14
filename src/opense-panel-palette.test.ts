@@ -94,14 +94,18 @@ afterEach(() => {
 });
 
 describe("OpenseActionPalette", () => {
-  it("inserts the fixed investigation prompt on Investigate click", async () => {
+  it("inserts the composed /opense-investigate command on Investigate click", async () => {
     const insertText = vi.fn();
     const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
 
     paletteButton(el, "palette-investigate").click();
 
+    // E2: line 1 the dispatch command, line 2 the self-sufficient instruction
+    // (the extension's first-token parse rule: element, then prompt verbatim).
     expect(insertText).toHaveBeenCalledWith(
-      "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements. The element is located in model/good.sysml",
+      "/opense-investigate Tracker::Parts::lens\n" +
+        "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements. " +
+        "The element is located in model/good.sysml",
     );
   });
 
@@ -112,7 +116,8 @@ describe("OpenseActionPalette", () => {
     paletteButton(el, "palette-investigate").click();
 
     expect(insertText).toHaveBeenCalledWith(
-      "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements.",
+      "/opense-investigate Tracker::Parts::lens\n" +
+        "Investigate Tracker::Parts::lens and summarise its structure, behaviour, and requirements.",
     );
   });
 
@@ -137,7 +142,7 @@ describe("OpenseActionPalette", () => {
     expect(taskInput(el).classList.contains("is-visible")).toBe(true);
   });
 
-  it("Enter inserts the edit prompt and hides the input", async () => {
+  it("Enter inserts the composed /opense-task command and hides the input", async () => {
     const insertText = vi.fn();
     const el = await mountPalette("Tracker::Parts::lens", "model/good.sysml", makeContext(insertText));
     paletteButton(el, "palette-task").click();
@@ -148,8 +153,12 @@ describe("OpenseActionPalette", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await el.updateComplete;
 
+    // E2: the task text rides in the line-2 instruction; the single-line
+    // task input keeps line 1 exactly the command + element.
     expect(insertText).toHaveBeenCalledWith(
-      'Perform task "Add validation" for element Tracker::Parts::lens. The element is located in model/good.sysml',
+      "/opense-task Tracker::Parts::lens\n" +
+        'Perform task "Add validation" for element Tracker::Parts::lens. ' +
+        "The element is located in model/good.sysml",
     );
     expect(input.classList.contains("is-visible")).toBe(false);
   });

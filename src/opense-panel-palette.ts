@@ -7,6 +7,15 @@
 // (qualified name, falling back to name/id) instead of a qualified-name
 // segment array, and the optional location is the element's declaring file.
 //
+// E2 (plan-v5 §2.E, opendoor `composeReviewCommand` idiom): Investigate and
+// Task insert COMPOSED COMMANDS — line 1 the `/opense-investigate` /
+// `/opense-task` dispatch command of the OpenSE Pi extension, line 2 the
+// self-sufficient instruction (opense-prompts.ts). When the extension is
+// installed, sending that text starts a named independent session; when it
+// is not, the current agent receives the whole text and the line-2
+// instruction keeps the flow working inline. The "Copy name" action stays
+// plain composer assistance (the bare subject, no command).
+//
 // Lit-based element (LitElement + reactive properties + declarative event
 // bindings + scoped static styles): plugin modules no longer load without an
 // import map — scripts/build-plugin.mjs esbuild-bundles the entry and its
@@ -18,7 +27,7 @@ import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } 
 import { classMap } from "lit/directives/class-map.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { property, state } from "lit/decorators.js";
-import { contextPrompt, editPrompt } from "./opense-prompts.js";
+import { composeInvestigateCommand, composeTaskCommand } from "./opense-prompts.js";
 import { buttonBase } from "./opense-styles.js";
 import { defineCustomElementOnce } from "./opense-shared.js";
 
@@ -55,22 +64,28 @@ export const taskIconSvg = svg`<svg width="20" height="20" viewBox="0 0 24 24" f
 export const copyIconSvg = svg`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
 
 /**
- * Insert the fixed investigation prompt for an element into the given prompt
- * editor. `filepath` is optional (elements without provenance simply omit the
- * location clause of the prompt). A missing editor is a no-op.
+ * Insert the composed `/opense-investigate` command for an element into the
+ * given prompt editor: line 1 the dispatch command with the element's
+ * qualified name, line 2 the self-sufficient investigation instruction
+ * (`composeInvestigateCommand` — see its parse-rule contract). `filepath` is
+ * optional (elements without provenance simply omit the location clause of
+ * the instruction). A missing editor is a no-op.
  */
 export function insertInvestigatePrompt(
   prompt: PluginPromptEditor | undefined,
   filepath: string | undefined,
   subject: string,
 ): void {
-  prompt?.insertText(contextPrompt(filepath, subject));
+  prompt?.insertText(composeInvestigateCommand(filepath, subject));
 }
 
 /**
- * Insert a custom-task prompt for an element into the given prompt editor.
- * `task` is expected to be already trimmed and non-empty (the element gates
- * submission on that before calling).
+ * Insert the composed `/opense-task` command for an element into the given
+ * prompt editor: line 1 the dispatch command with the element's qualified
+ * name, line 2 the task-carrying instruction (`composeTaskCommand` — see its
+ * parse-rule contract). `task` is expected to be already trimmed and
+ * non-empty (the element gates submission on that before calling), and the
+ * single-line task input keeps the composition single-line-safe on line 1.
  */
 export function insertTaskPrompt(
   prompt: PluginPromptEditor | undefined,
@@ -78,7 +93,7 @@ export function insertTaskPrompt(
   subject: string,
   task: string,
 ): void {
-  prompt?.insertText(editPrompt(filepath, subject, task));
+  prompt?.insertText(composeTaskCommand(filepath, subject, task));
 }
 
 /**
@@ -96,10 +111,10 @@ export function insertCopyNamePrompt(
 /**
  * Lit element providing horizontal Copy name, Investigate, and Task controls
  * plus a conditional inline task input, for the selected element in the
- * OpenSE detail pane. The Investigate button inserts a fixed investigation
- * prompt; the Copy name button inserts the bare subject string; the Task
- * button opens an inline input whose submitted text is inserted as a custom
- * prompt.
+ * OpenSE detail pane. The Investigate button inserts the composed
+ * `/opense-investigate` command; the Copy name button inserts the bare
+ * subject string; the Task button opens an inline input whose submitted text
+ * is inserted as the composed `/opense-task` command.
  *
  * Interaction semantics mirror the syside palette: a trimmed non-empty Enter
  * submits, Escape or blur closes without inserting, and reselecting Task
