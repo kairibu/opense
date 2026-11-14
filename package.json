@@ -21,15 +21,15 @@
     "plugins": [
       {
         "id": "opense",
-        "browserRoot": ".",
-        "module": "pi-web-plugin.js"
+        "browserRoot": "dist/browser",
+        "module": "dist/browser/pi-web-plugin.js"
       }
     ]
   },
   "files": [
     "dist"
   ],
-  "main": "dist/pi-web-plugin.js",
+  "main": "dist/browser/pi-web-plugin.js",
   "scripts": {
     "build": "node scripts/build-plugin.mjs",
     "dev": "node scripts/build-plugin.mjs --watch",

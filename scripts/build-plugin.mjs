@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
 // Build the OpenSE pi-web plugin: esbuild-bundle the TypeScript entry from
-// src/ into a single dist/pi-web-plugin.js, bundle the Pi extension from
-// src/pi-extension/opense-dispatch.ts into dist/pi-extension/index.js, and
-// copy non-TS assets (package.json manifest, vendor bundle) — the `pi` key
-// stripped, see below.
+// src/ into a single dist/browser/pi-web-plugin.js, bundle the Pi extension
+// from src/pi-extension/opense-dispatch.ts into dist/pi-extension/index.js,
+// and copy non-TS assets (generated plugin manifest, chip stylesheet, vendor
+// bundle) — the root manifest's `pi` key stripped and its piWeb paths
+// rewritten dist-relative in the generated copy, see below.
 //
 // Adapted from pi-web's scripts/build-plugins.mjs (and opendoor's twin for
 // the extension half): pi-web bundles each plugin entry with esbuild
@@ -17,32 +18,45 @@
 // build) and same-package relative modules (inlined), so the shipped
 // extension is self-contained and reaches no host internals.
 //
+// TWO INSTALL ROOTS, ONE PACKAGE (opendoor discipline). The repository-root
+// package.json is the NPM-PACKAGE manifest: its `piWeb.plugins` paths and its
+// `pi.extensions` entry are PACKAGE-ROOT-relative, which is what PI WEB's
+// catalog (`dist/server/piWebPluginCatalog.js`: `resolve(packageRoot, path)`)
+// and Pi's package manager both resolve them against when the package is
+// installed from npm or a local source through **Settings → Pi packages**.
+// The generated dist/package.json is the PLUGIN-ROOT manifest for the legacy
+// local development install, where dist/ itself IS the installed plugin
+// directory (`ln -s …/dist ~/.pi-web/plugins/opense`): its paths are
+// dist-relative and it carries NO `pi.extensions` entry (pointing a
+// package-root-relative path at the dist root would double-prefix `dist/`).
+// A manifest is therefore always correct for the root it is read from;
+// `main` is rewritten too.
+//
+// The NARROW browser root (`dist/browser`) keeps the extension, the dist
+// manifest, and package metadata out of the plugin asset routes (pi-web
+// docs: a sibling server module returns not found through plugin asset
+// routes — the same exclusion opendoor applies to its server entry).
+//
 // Output layout (dist/):
-//   package.json            — repository-root manifest with the `pi` key
-//                             STRIPPED (see below); carries the piWeb.plugins
-//                             manifest the pi-web catalog discovers
-//   pi-web-plugin.js        — bundled entry ("// Generated from …"): wiring +
-//                             panel/palette modules + inlined npm deps
-//   pi-extension/index.js   — bundled Node ESM Pi extension entry
-//                             (`/opense-investigate` + `/opense-task` session
-//                             dispatch; self-contained, zero bare imports)
-//   opense-chips.css         — verbatim copy of src/opense-chips.css; the
+//   package.json            — GENERATED plugin-root manifest (dist-relative
+//                             piWeb paths, no `pi` key)
+//   browser/pi-web-plugin.js — bundled entry ("// Generated from …"): wiring
+//                             + panel/palette modules + inlined npm deps
+//   browser/opense-chips.css — verbatim copy of src/opense-chips.css; the
 //                             `stylesheets` contribution's module-relative
 //                             URL (new URL("./opense-chips.css",
-//                             import.meta.url).href) must resolve next to the
-//                             bundle in the shipped layout, and esbuild
-//                             never emits it (the plugin-api import is
-//                             types-only; no TS module imports CSS)
-//   vendor/sysml-parser.bundle.js — verbatim copy (committed vendor asset);
-//                             kept external so the vendored parser stays
-//                             diffable and is not duplicated into the bundle
-//
-// The manifest `pi` strip (opendoor discipline): `pi.extensions` paths are
-// PACKAGE-ROOT-relative ("./dist/pi-extension/index.js") — Pi's package
-// manager resolves them against the installed package root, which is correct
-// for the npm/local-source package but would double-prefix when read from
-// dist/ itself. dist/ is pi-web's plugin directory (symlink flow), never a Pi
-// package root, so the dist manifest carries no `pi` entry at all.
+//                             import.meta.url).href) must resolve next to
+//                             the bundle, and esbuild never emits it (the
+//                             plugin-api import is types-only)
+//   browser/vendor/sysml-parser.bundle.js — verbatim copy (committed vendor
+//                             asset); kept external so the vendored parser
+//                             stays diffable and is not duplicated into the
+//                             bundle
+//   pi-extension/index.js   — bundled Node ESM Pi extension entry
+//                             (`/opense-investigate` + `/opense-task` session
+//                             dispatch; self-contained, zero bare imports);
+//                             sits OUTSIDE the browser root so it is never
+//                             browser-public
 //
 // Test files (*.test.ts), the shared test-support module, and .d.ts
 // declarations are excluded, exactly like pi-web's build: types are checked
@@ -63,8 +77,9 @@ const outDir = resolve(rootDir, "dist");
 const watchMode = process.argv.includes("--watch");
 const cwd = process.cwd();
 
+const browserDir = resolve(outDir, "browser");
 const entrySource = resolve(srcDir, "pi-web-plugin.ts");
-const entryOutput = resolve(outDir, "pi-web-plugin.js");
+const entryOutput = resolve(browserDir, "pi-web-plugin.js");
 const extensionEntrySource = resolve(srcDir, "pi-extension", "opense-dispatch.ts");
 const extensionEntryOutput = resolve(outDir, "pi-extension", "index.js");
 
@@ -84,18 +99,27 @@ async function buildAll() {
   await mkdir(dirname(extensionEntryOutput), { recursive: true });
   await buildEntry();
   await buildExtensionEntry();
-  // The plugin manifest lives at the repository root; dist/ needs it so the
-  // pi-web catalog can discover the piWeb.plugins entry — with the `pi` key
-  // STRIPPED (package-root-relative extension paths would double-prefix
-  // from dist/; see the module header). Everything else stays verbatim.
+  // The plugin manifest lives at the repository root; dist/ needs a
+  // PLUGIN-ROOT copy so the pi-web catalog can discover the piWeb.plugins
+  // entry from the symlinked dist/ directory: the `pi` key is STRIPPED
+  // (package-root-relative extension paths would double-prefix from dist/)
+  // and the piWeb/main paths are rewritten dist-relative (see the module
+  // header). Everything else stays verbatim.
   const manifest = JSON.parse(await readFile(resolve(rootDir, "package.json"), "utf8"));
   delete manifest.pi;
+  manifest.main = "pi-web-plugin.js";
+  const pluginEntry = manifest.piWeb?.plugins?.[0];
+  if (pluginEntry !== undefined) {
+    pluginEntry.browserRoot = ".";
+    pluginEntry.module = "pi-web-plugin.js";
+  }
   await writeFile(resolve(outDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   // The chip stylesheet ships next to the bundle so the `stylesheets`
-  // contribution's module-relative URL resolves in dist/ (see the layout
-  // note above) — the copy is ours, esbuild only bundles the JS entry.
-  await copyFile(resolve(srcDir, "opense-chips.css"), resolve(outDir, "opense-chips.css"));
-  await copyDirectory(resolve(srcDir, "vendor"), resolve(outDir, "vendor"));
+  // contribution's module-relative URL resolves in the shipped layout (see
+  // the layout note above) — the copy is ours, esbuild only bundles the JS
+  // entry.
+  await copyFile(resolve(srcDir, "opense-chips.css"), resolve(browserDir, "opense-chips.css"));
+  await copyDirectory(resolve(srcDir, "vendor"), resolve(browserDir, "vendor"));
   console.log(`[opense] bundled ${relative(cwd, entrySource)} into ${relative(cwd, entryOutput)}`);
   console.log(`[opense] bundled ${relative(cwd, extensionEntrySource)} into ${relative(cwd, extensionEntryOutput)}`);
 }

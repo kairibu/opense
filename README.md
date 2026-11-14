@@ -32,16 +32,41 @@ tree (pi-web handles symlinked plugin directories):
 ln -s ./dist ~/.pi-web/plugins/opense
 ```
 
-pi-web then discovers and serves the plugin.
+pi-web then discovers and serves the browser plugin (panel, message
+action, chips).
+
+4. Register the package as a **Pi package** so the `/opense-investigate`
+and `/opense-task` commands load. The commands live in the package's Pi
+extension, which Pi loads from its **own** package settings — the pi-web
+plugin tree above does not carry them:
+
+```sh
+pi install /absolute/path/to/this/repository
+```
+
+or **Settings → Pi packages** with the repository root as the local
+package source. Point at the **repository root**, not `dist/` — the
+generated `dist/package.json` deliberately carries no `pi.extensions`
+entry (the extension path is package-root-relative and would
+double-prefix from dist/). Then run `/reload` once in each idle session;
+new sessions pick the commands up automatically.
+
+With the Pi package registered, the plugin-tree symlink is redundant
+(the package manifest now serves the browser plugin too) and can be
+removed (`rm ~/.pi-web/plugins/opense`, then reload the browser) to keep
+a single discovery path.
 
 ### Installing from npm
 
-Once published, the package is installable through **Settings → Pi packages**
-by name. Community discovery on [pi-web.dev/community-plugins](https://pi-web.dev/community-plugins)
-requires the `pi-web.dev-plugin` npm keyword, which this package declares in
-`package.json` (alongside `pi-web`, `sysml`, `sysml-v2`, `mbse`). The peer
-dependency `@jmfederico/pi-web >= 1.202611.1` documents the supported host
-range.
+Once published: `pi install npm:opense-plugin` (or **Settings → Pi
+packages** by name) installs both halves — the browser plugin manifest
+and the Pi extension — from one mechanism; no plugin-tree symlink is
+needed. Community discovery on
+[pi-web.dev/community-plugins](https://pi-web.dev/community-plugins)
+requires the `pi-web.dev-plugin` npm keyword, which this package declares
+in `package.json` (alongside `pi-web`, `sysml`, `sysml-v2`, `mbse`). The
+peer dependency `@jmfederico/pi-web >= 1.202611.1` documents the
+supported host range.
 
 The "Open .sysml links" toggle (OpenSE palette action) is a
 **per-browser-device** `localStorage` preference, not a global one: pi-web
@@ -128,7 +153,8 @@ All sources live under `src/`.
 - `src/opense-panel-chips.ts` — the `[[Pkg::Wheel]]` markdown extension
   (reference chips in chat and Markdown previews, C4)
 - `src/opense-chips.css` — the chip stylesheet, shipped next to the bundle
-  (`dist/opense-chips.css`) and wired through the `stylesheets` contribution
+  (`dist/browser/opense-chips.css`) and wired through the `stylesheets`
+  contribution
 - `src/opense-panel-chooser.ts` — the chat-side candidate chooser overlay
   opened by the message action when a message carries several references
 - `src/opense-panel-palette.ts` — action palette below the element details

@@ -7,7 +7,10 @@
 
 The package ships TWO runtime artifacts (plan-v5 §2.E, opendoor pattern):
 
-- a **browser-only pi-web plugin** (`piWeb.plugins` → `dist/pi-web-plugin.js`),
+- a **browser-only pi-web plugin** (`piWeb.plugins` →
+  `dist/browser/pi-web-plugin.js`; package-root-relative in the root
+  manifest, dist-relative in the generated `dist/package.json` — two
+  install roots, one package, opendoor pattern),
   and
 - a **Pi extension** (`pi.extensions` → `dist/pi-extension/index.js`, built
   from `src/pi-extension/opense-dispatch.ts`): registers `/opense-investigate`
