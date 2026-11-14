@@ -60,10 +60,13 @@ const openseWorkspace: Workspace = {
 
 afterEach(() => {
   document.body.replaceChildren();
+  // C1: never let a preference test leak its localStorage key into the
+  // next test (the file's own tests are preference-independent otherwise).
+  localStorage.removeItem("opense.claimSysmlLinks");
 });
 
 describe("bundled OpenSE browser plugin", () => {
-  it("contributes an always-visible panel and two unconditional shortcut actions", async () => {
+  it("contributes an always-visible panel and three unconditional actions", async () => {
     const { contributions } = createOpenseBrowserContributions("opense", html, svg);
     const panel = requiredPanel({ contributions });
     const context = panelContext(createFakeFiles({ trees: {} }));
@@ -79,12 +82,12 @@ describe("bundled OpenSE browser plugin", () => {
     expect(typeof panel.onInvalidate).toBe("function");
 
     const actions = contributions.actions ?? [];
-    expect(actions.map(({ id }) => id)).toEqual(["view.opense", "workspace.refresh-opense"]);
+    expect(actions.map(({ id }) => id)).toEqual(["view.opense", "workspace.refresh-opense", "opense.claim-sysml-links"]);
     const goToOpense = actions[0];
     const refresh = actions[1];
     expect(goToOpense?.shortcut).toBe("mod+6");
     expect(refresh?.shortcut).toBe("mod+shift+m");
-    // Both actions are enabled unconditionally (no `enabled` gate at all).
+    // All three actions are enabled unconditionally (no `enabled` gate at all).
     expect(goToOpense?.enabled).toBeUndefined();
     expect(refresh?.enabled).toBeUndefined();
 
@@ -508,6 +511,98 @@ describe("bundled OpenSE browser plugin", () => {
 
     const detail = bodyShadow(container).querySelector<HTMLElement>(".opense-detail");
     expect(detail?.textContent).toContain("lens");
+
+    render(null, container);
+  });
+
+  // C1 (D1): `.sysml` file links from the chat transcript open OpenSE at
+  // file level — `fileOpenQuery` claims them while the per-browser
+  // preference is on (default), and hands everything else back to Files.
+  it("claims .sysml file links through fileOpenQuery, gated on the preference", () => {
+    const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
+    const context = panelContext(createFakeFiles({ trees: {} }));
+    const fileOpenQuery = panel.fileOpenQuery;
+    if (fileOpenQuery === undefined) throw new Error("Expected the panel's fileOpenQuery");
+
+    expect(fileOpenQuery(context, "models/a.sysml")).toEqual({ file: "models/a.sysml" });
+    // Case-insensitive extension check; the claimed path is verbatim.
+    expect(fileOpenQuery(context, "models/Wheel.SYSML")).toEqual({ file: "models/Wheel.SYSML" });
+    // Non-`.sysml` paths return undefined so the Files panel (order 10)
+    // answers as before.
+    expect(fileOpenQuery(context, "readme.md")).toBeUndefined();
+    expect(fileOpenQuery(context, "notes.txt")).toBeUndefined();
+
+    try {
+      localStorage.setItem("opense.claimSysmlLinks", "0");
+      // Preference off → OpenSE claims nothing; Files answers .sysml again.
+      expect(fileOpenQuery(context, "models/a.sysml")).toBeUndefined();
+    } finally {
+      localStorage.removeItem("opense.claimSysmlLinks");
+    }
+  });
+
+  // C1: the third action is the per-browser preference toggle — no shortcut,
+  // Workspace group, a title GETTER reflecting the current state, and a run
+  // that flips the stored preference (read synchronously per click, so no
+  // reload is needed anywhere).
+  it("toggles the .sysml link claim through the palette action", async () => {
+    const { contributions } = createOpenseBrowserContributions("opense", html, svg);
+    const action = (contributions.actions ?? []).find(({ id }) => id === "opense.claim-sysml-links");
+    if (action === undefined) throw new Error("Expected the claim-sysml-links action");
+    expect(action.group).toBe("Workspace");
+    expect(action.shortcut).toBeUndefined();
+
+    try {
+      localStorage.removeItem("opense.claimSysmlLinks");
+      // Title reflects the CURRENT state: claiming is on (default), so the
+      // action offers to hand the links back to Files.
+      expect(action.title).toBe("Open .sysml links in Files");
+      await action.run(runtimeContext());
+      expect(localStorage.getItem("opense.claimSysmlLinks")).toBe("0");
+      // Now claiming is off, so the action offers to claim for OpenSE.
+      expect(action.title).toBe("Open .sysml links in OpenSE");
+      await action.run(runtimeContext());
+      expect(localStorage.getItem("opense.claimSysmlLinks")).toBe("1");
+      expect(action.title).toBe("Open .sysml links in Files");
+    } finally {
+      localStorage.removeItem("opense.claimSysmlLinks");
+    }
+  });
+
+  // C3: a deep-linked element that resolves to nothing surfaces a dismissible
+  // notice above the outline instead of failing silently.
+  it("renders a dismissible notice for an unresolvable deep-linked element", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    const panel = requiredPanel(createOpenseBrowserContributions("opense", html, svg));
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::missing" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const container = document.createElement("div");
+    document.body.append(container);
+    await renderPanel(panel, context, container);
+    await renderPanel(panel, context, container);
+    const root = bodyShadow(container);
+
+    const notice = root.querySelector<HTMLElement>(".opense-selection-notice");
+    if (notice === null) throw new Error("Expected the selection notice");
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent).toContain("'Tracker::missing' was not found in the current model");
+    // Above the outline: the notice precedes it in DOM order (between the
+    // kind filter and the outline in .opense-left).
+    const outline = root.querySelector(".opense-outline");
+    if (outline === null) throw new Error("Expected the outline");
+    expect(notice.compareDocumentPosition(outline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The miss selected nothing: no selected row, empty detail pane.
+    expect(root.querySelector(".opense-row.is-selected")).toBeNull();
+    expect(root.textContent).toContain("Select an element in the outline to inspect its details.");
+
+    // Dismiss clears the notice (the controller's dismiss method) without
+    // touching the (empty) selection.
+    button(root, "Dismiss").click();
+    await renderPanel(panel, context, container);
+    expect(root.querySelector(".opense-selection-notice")).toBeNull();
 
     render(null, container);
   });

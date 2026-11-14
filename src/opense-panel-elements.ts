@@ -6,7 +6,7 @@
 //   <pi-web-opense-panel-body>   — the panel root rendered by the host. Its
 //     shadow root composes the toolbar (title + Parse trigger), the status
 //     strip element, and the scrollable body region (diagnostics / kind
-//     filter / outline / element-detail pane). All `opense-*` layout and
+//     filter / deep-link notice / outline / element-detail pane). All `opense-*` layout and
 //     content rules live in its `static styles`; pi-web theming reaches it
 //     only through the inherited `--pi-*` custom properties of the host
 //     page (plan §3.4 — host chrome never reaches into the shadow root).
@@ -23,7 +23,8 @@
 // elements via properties, no Context provider): the host render function
 // (opense-panel.ts) reads the workspace controller's fields at template
 // construction and mirrors them into reactive properties on the body element
-// (`.result .loading .stale .error .selectedId .kindFilter`). Every state
+// (`.result .loading .stale .error .selectedId .kindFilter
+// .selectionNotice`). Every state
 // mutation pushes `requestRender` through the controller's current context
 // handle, the host re-renders, and the *changed* property values commit —
 // that is what re-runs the elements' shadow templates. The controller object
@@ -91,6 +92,8 @@ export interface OpensePanelBodyElement extends LitElement {
   error: string | undefined;
   selectedId: string | undefined;
   kindFilter: Member["kind"] | undefined;
+  /** Dismissible deep-link notice (C3), mirrored from the controller. */
+  selectionNotice: string | undefined;
 }
 
 /** Register both panel elements; safe to call more than once (plugin modules
@@ -261,6 +264,12 @@ function defineOpensePanelBodyElement(): void {
 
       @property({ attribute: false })
       kindFilter: Member["kind"] | undefined;
+
+      /** Dismissible deep-link notice (C3), mirrored from the controller;
+       *  rendered above the outline while a deep-linked element did not
+       *  resolve in the current model. */
+      @property({ attribute: false })
+      selectionNotice: string | undefined;
 
       static override styles = [
         buttonBase,
@@ -449,6 +458,21 @@ function defineOpensePanelBodyElement(): void {
           color: var(--pi-accent);
         }
 
+        /* C3: dismissible deep-link notice above the outline — warning
+           border/background mirroring .opense-diagnostic.opense-warning,
+           flex row (message + Dismiss button) with small padding. */
+        .opense-selection-notice {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          gap: 6px;
+          margin: 8px 8px 0;
+          border: 1px solid var(--pi-warning-border);
+          border-radius: 6px;
+          background: color-mix(in srgb, var(--pi-warning) 9%, transparent);
+          padding: 5px 7px;
+        }
+
         .opense-outline {
           padding: 6px;
           display: grid;
@@ -634,6 +658,7 @@ function defineOpensePanelBodyElement(): void {
                 () => when(result.report.diagnostics.length > 0, () => this.renderDiagnostics(result)),
               )}
               ${this.renderKindFilter(result)}
+              ${this.renderSelectionNotice()}
               ${this.renderOutline(result)}
             </section>
             <section class="opense-right">
@@ -688,6 +713,26 @@ function defineOpensePanelBodyElement(): void {
           >${label}</button>
         `;
       }
+
+      /** C3: the dismissible deep-link notice, between the kind filter and
+       *  the outline (above the outline) — cleared by the controller on
+       *  manual selection, a fresh parse, or this Dismiss button. */
+      private renderSelectionNotice(): TemplateResult | typeof nothing {
+        return when(
+          this.selectionNotice !== undefined,
+          () => html`
+            <div class="opense-selection-notice" role="status">
+              <span>${this.selectionNotice}</span>
+              <button type="button" @click=${this.onDismissSelectionNotice}>Dismiss</button>
+            </div>
+          `,
+          () => nothing,
+        );
+      }
+
+      private onDismissSelectionNotice = (): void => {
+        this.controller?.dismissSelectionNotice();
+      };
 
       private renderOutline(result: OpenseParseResult): TemplateResult {
         if (result.report.parsedFileCount === 0) {

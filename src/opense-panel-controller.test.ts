@@ -495,7 +495,7 @@ describe("OpenseWorkspaceController (fake host, no DOM)", () => {
     expect(files.readFile.mock.calls[0]).toHaveLength(1);
   });
 
-  // --- W4a: selection ⇄ navigation-query deep links ----------------------
+  // --- W4a/C1/C3: selection ⇄ navigation-query deep links -----------------
 
   it("writes the selection into the navigation query", async () => {
     const files = createFakeFiles({
@@ -576,6 +576,149 @@ describe("OpenseWorkspaceController (fake host, no DOM)", () => {
     controller.hostConnected();
     await settle();
 
+    expect(controller.selectedId).toBeUndefined();
+  });
+
+  // --- C1: `.sysml` file links → first named row of that file -------------
+
+  it("restores the first named row of the deep-linked file", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("alpha.sysml", "alpha.sysml"), fileEntry("beta.sysml", "beta.sysml")]) },
+      reads: {
+        "alpha.sysml": text("package Alpha {\n  part a1 : LensCell;\n}"),
+        "beta.sysml": text("package Beta {\n  part b1 : LensCell;\n}"),
+      },
+    });
+    const { navigation, set } = createFakeNavigation({ query: { file: "beta.sysml" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    // The first NAMED row declared in beta.sysml (document order: the
+    // package row — NOT the model-wide first row "Alpha").
+    expect(controller.selectedId).toBe("Beta");
+    // The file-derived selection is never mirrored into the `element` key.
+    expect(set).not.toHaveBeenCalled();
+    expect(navigation.query["element"]).toBeUndefined();
+    expect(controller.selectionNotice).toBeUndefined();
+  });
+
+  it("selects nothing when the deep-linked file matches no declaring file", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    // applied: false keeps selectRow's mirror out of the query record, so the
+    // previous selection below stays local-only.
+    const { navigation, set } = createFakeNavigation({ applied: false });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+    controller.selectRow("Tracker");
+    expect(controller.selectedId).toBe("Tracker");
+
+    // A file query that matches no declaring file drops the previous
+    // selection (file query > previous surviving selection; no match → no
+    // selection) and raises no notice (C1 fail-safe).
+    (navigation.query as Record<string, string | readonly string[]>)["file"] = "gone.sysml";
+    await controller.parse();
+    expect(controller.selectedId).toBeUndefined();
+    expect(controller.selectionNotice).toBeUndefined();
+    // Only the manual selectRow touched the navigation (rejected by this
+    // host); the file-restore path itself never writes the query.
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledWith("element", "Tracker");
+    expect(navigation.query["element"]).toBeUndefined();
+  });
+
+  it("resolves the element query over the file query when both are present", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("alpha.sysml", "alpha.sysml"), fileEntry("beta.sysml", "beta.sysml")]) },
+      reads: {
+        "alpha.sysml": text("package Alpha {\n  part a1 : LensCell;\n}"),
+        "beta.sysml": text("package Beta {\n  part b1 : LensCell;\n}"),
+      },
+    });
+    // The element lives in beta.sysml while the file query points at
+    // alpha.sysml: the element query wins (C1 precedence).
+    const { navigation } = createFakeNavigation({ query: { element: "Beta::b1", file: "alpha.sysml" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectedId).toBe("Beta::b1");
+    expect(controller.selectionNotice).toBeUndefined();
+  });
+
+  // --- C3: hardened element-query resolution ------------------------------
+
+  it("resolves a deep-linked qualified name across quoting differences", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: {
+        "model.sysml": text(
+          "package Tracker {\n  requirement 'needs focus' {\n    part lens : LensCell;\n  }\n}",
+        ),
+      },
+    });
+    // Chat-written unquoted name; the row id carries the parser's quoting.
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::needs focus" } });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    expect(controller.selectedId).toBe("Tracker::'needs focus'");
+    expect(controller.selectionNotice).toBeUndefined();
+  });
+
+  it("raises a dismissible notice for an unresolvable deep-linked element", async () => {
+    const files = createFakeFiles({
+      trees: { "": tree([fileEntry("model.sysml", "model.sysml")]) },
+      reads: { "model.sysml": text("package Tracker {\n  part lens : LensCell;\n}") },
+    });
+    // applied: false keeps selectRow's mirror from overwriting the stale
+    // query key below (the re-raise step needs it to stay missing).
+    const { navigation } = createFakeNavigation({ query: { element: "Tracker::missing" }, applied: false });
+    const { context } = createPanelContext({ files: files.files, navigation });
+    const { host } = fakeHost();
+    const controller = new OpenseWorkspaceController(host, context, parseOpenseWorkspace);
+    controller.hostConnected();
+    await settle();
+
+    // Miss: no selection, honest notice instead of a silent fail.
+    expect(controller.selectedId).toBeUndefined();
+    expect(controller.selectionNotice).toBe("'Tracker::missing' was not found in the current model");
+
+    // Manual selection clears the notice (local-only — the query keeps the
+    // stale key).
+    controller.selectRow("Tracker");
+    expect(controller.selectionNotice).toBeUndefined();
+    expect(controller.selectedId).toBe("Tracker");
+
+    // A fresh parse re-attempts resolution: parse start clears the notice,
+    // the still-stale query misses again and re-raises it.
+    await controller.parse();
+    expect(controller.selectedId).toBeUndefined();
+    expect(controller.selectionNotice).toBe("'Tracker::missing' was not found in the current model");
+
+    // Dismiss clears it without touching the selection or the query.
+    controller.dismissSelectionNotice();
+    expect(controller.selectionNotice).toBeUndefined();
+    expect(navigation.query["element"]).toBe("Tracker::missing");
+
+    // A fresh parse without any query stays clear (parse start clears it;
+    // nothing re-raises it).
+    delete (navigation.query as Record<string, string | readonly string[]>)["element"];
+    await controller.parse();
+    expect(controller.selectionNotice).toBeUndefined();
     expect(controller.selectedId).toBeUndefined();
   });
 });

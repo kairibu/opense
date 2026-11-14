@@ -43,6 +43,11 @@ requires the `pi-web.dev-plugin` npm keyword, which this package declares in
 dependency `@jmfederico/pi-web >= 1.202611.1` documents the supported host
 range.
 
+The "Open .sysml links" toggle (OpenSE palette action) is a
+**per-browser-device** `localStorage` preference, not a global one: pi-web
+offers no settings context for browser-only plugins. Global enable/disable
+remains available via **Settings → PI WEB plugins**.
+
 ## Development
 
 ### Structure

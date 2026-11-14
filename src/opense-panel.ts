@@ -63,6 +63,7 @@ import { discoverOpenseFiles } from "./opense-discovery.js";
 import { outlineRows } from "./opense-outline.js";
 import { defineOpenseActionPaletteElement } from "./opense-panel-palette.js";
 import { defineOpensePanelElements } from "./opense-panel-elements.js";
+import { openseClaimsSysmlLinks, setOpenseClaimsSysmlLinks } from "./opense-preferences.js";
 import { OpenseWorkspaceController, type OpenseWorkspaceHost } from "./opense-panel-controller.js";
 
 const OPENSE_PANEL_LOCAL_ID = "workspace.opense";
@@ -254,6 +255,21 @@ function createOpenseActions(panelId: string): PluginActionV5[] {
       group: "Workspace",
       run: (context: PluginRuntimeContext) => context.refreshWorkspacePanels(panelId),
     },
+    {
+      // C1 (D1): per-browser toggle for the `.sysml` chat-link claim. No
+      // shortcut — an occasional preference, not a frequent navigation
+      // target. The title is a GETTER so each palette read reflects the
+      // current preference: while claiming is ON the action offers to hand
+      // the links back to Files, while OFF it offers to claim them for
+      // OpenSE (clicking flips the state; `fileOpenQuery` reads it
+      // synchronously per click, so no reload is needed).
+      id: "opense.claim-sysml-links",
+      group: "Workspace",
+      get title() {
+        return openseClaimsSysmlLinks() ? "Open .sysml links in Files" : "Open .sysml links in OpenSE";
+      },
+      run: () => { setOpenseClaimsSysmlLinks(!openseClaimsSysmlLinks()); },
+    },
   ];
 }
 
@@ -284,6 +300,15 @@ function createOpensePanel(registry: OpenseWorkspaceRegistry): WorkspacePanelCon
     // (mutation, agent-activity) the host forwards here.
     invalidationResources: ["workspace.files"],
     onInvalidate: (context, invalidation) => registry.invalidate(context, invalidation),
+    // C1 (D1): `.sysml` file links from the chat transcript open OpenSE at
+    // file level. Claiming is preference-gated (default on) and
+    // `.sysml`-only (case-insensitive); every other extension yields
+    // `undefined` so the Files panel (order 10) answers as before. Read
+    // synchronously per click, so the palette toggle takes effect without a
+    // reload. The returned `{ file: path }` query drives the controller's
+    // first-row-of-file restore (opense-panel-controller.ts).
+    fileOpenQuery: (_context: WorkspacePanelContext, path: string) =>
+      openseClaimsSysmlLinks() && path.toLowerCase().endsWith(".sysml") ? { file: path } : undefined,
     render: (context) => renderOpensePanel(registry, context),
   };
 }
@@ -310,6 +335,7 @@ function renderOpensePanel(registry: OpenseWorkspaceRegistry, context: Workspace
       .error=${controller.error}
       .selectedId=${controller.selectedId}
       .kindFilter=${controller.kindFilter}
+      .selectionNotice=${controller.selectionNotice}
     ></pi-web-opense-panel-body>
   `;
 }

@@ -5,7 +5,7 @@
 // default export with the activation context the host actually supplies
 // (src/client/src/plugins/external.ts parsePluginModule → activate), then
 // asserts the returned contributions carry the always-visible OpenSE panel
-// and its two unconditional actions, and that the actions reach the host
+// and its three unconditional actions, and that the actions reach the host
 // navigation/refresh entry points with the runtime-qualified panel id.
 // Structural wiring only — rendered parse behavior lives in
 // opense-panel.test.ts.
@@ -42,7 +42,7 @@ describe("bundled OpenSE browser entry", () => {
     expect(typeof plugin.activate).toBe("function");
   });
 
-  it("exports the host-expected plugin shape and contributes the panel and both actions", () => {
+  it("exports the host-expected plugin shape and contributes the panel and all three actions", () => {
     expect(plugin.apiVersion).toBe(5);
     expect(plugin.name).toBe("OpenSE");
     expect(typeof plugin.activate).toBe("function");
@@ -67,7 +67,7 @@ describe("bundled OpenSE browser entry", () => {
     expect(typeof panel.onInvalidate).toBe("function");
     expect(typeof panel.render).toBe("function");
 
-    expect(contributions.actions?.map(({ id }) => id)).toEqual(["view.opense", "workspace.refresh-opense"]);
+    expect(contributions.actions?.map(({ id }) => id)).toEqual(["view.opense", "workspace.refresh-opense", "opense.claim-sysml-links"]);
   });
 
   // W2: the activation result carries `dispose`, which releases the

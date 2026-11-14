@@ -20,6 +20,22 @@ import type {
 import type { OutlineRow } from "./opense-contract.js";
 
 /**
+ * Normalize one qualified name for equality comparisons: trim every
+ * `::` segment and strip a redundant segment quote together with its optional
+ * `[n]` sibling suffix. Mirrors the vendored parser's own
+ * `normalizeQualifiedName` (sysml-parser.bundle.js, src/query.ts — the
+ * `byId`/`get()` fallback's comparison key), so panel-side selection and
+ * detail-side resolution cannot drift apart: `Tracker::needs focus` and
+ * `Tracker::'needs focus'` (and `Tracker::'needs focus'[1]`) compare equal.
+ */
+export function normalizedQualifiedName(value: string): string {
+  return value
+    .split("::")
+    .map((segment) => segment.trim().replace(/^'(.*)'(\[\d+\])?$/, "$1$2"))
+    .join("::");
+}
+
+/**
  * Distinct kinds of the NAMED elements present in the model, in first-seen
  * (document) order. The outline renders named rows only (unnamed elements
  * surface as owned members in the detail pane), so the kind filter is built

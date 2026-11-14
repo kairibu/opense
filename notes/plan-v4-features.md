@@ -27,6 +27,16 @@ scout inventory of this repo and `../pi-web` (browser plugin API v4,
      fixed, the round-trip only knows the file.
    Revisit only if pi-web changes file-open arbitration (e.g. extension or
    service-worker based) or enriches link payloads.
+
+   **W4b resolution note (2026-11-14, plan-v5-features.md §2.C1):** both
+   blockers re-evaluated. Blocker 1 is fixed — `resolveWorkspaceFileOpen`
+   still iterates by `order`, and OpenSE's panel now declares `order: 7`
+   (df6b6ed), ahead of the bundled Files panel (10), so its `fileOpenQuery`
+   is reachable and shipped as plan-v5 C1 (`.sysml` chat links open OpenSE
+   at file level, with a per-browser preference toggling the claim). Blocker
+   2 is accepted as file-granularity — link payloads still carry only a bare
+   workspace-relative path; element granularity is delivered by plan-v5 C2
+   (the message action) instead of the link payload.
 3. **W5 `contentRenderers` for `.sysml`: dropped** — not wanted at the
    moment. Do not create `src/opense-content-renderer.ts`.
 4. Item 6 of the migration note (server entry, `apiVersion: 3`) remains

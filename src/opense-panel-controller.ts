@@ -2,8 +2,8 @@
 // OpenSE per-workspace reactive controller (plan §3.2): one
 // `OpenseWorkspaceController` instance holds the complete UI state of one
 // workspace's OpenSE panel — parse result, loading/stale/error flags, outline
-// selection, kind filter, and the in-flight `parseRequest` reuse guard — and
-// pushes every connected state mutation to the panel host via the CURRENT
+// selection, the deep-link resolution notice (C3), kind filter, and the
+// in-flight `parseRequest` reuse guard — and pushes every connected state mutation to the panel host via the CURRENT
 // workspace context handle (`this.context.host.requestRender()`), gated on
 // the controller's own connection flag.
 //
@@ -30,7 +30,7 @@ import type { Member } from "./vendor/sysml-parser.bundle.js";
 import type { OutlineRow } from "./opense-contract.js";
 import type { OpenseDiscoveryFiles, OpenseDiscoveryRequestOptions } from "./opense-discovery.js";
 import type { OpenseParseResult } from "./opense-panel.js";
-import { namedOutlineKinds } from "./opense-outline.js";
+import { elementDetails, namedOutlineKinds, normalizedQualifiedName } from "./opense-outline.js";
 import { formatUnknownError } from "./opense-shared.js";
 
 /** Trailing-edge invalidation debounce (W1): mutation / agent-activity bursts
@@ -104,6 +104,12 @@ export class OpenseWorkspaceController implements ReactiveController {
 
   /** Active kind filter; undefined = all kinds. */
   kindFilter: Member["kind"] | undefined;
+
+  /** Dismissible notice for a deep-linked element that resolved to nothing
+   *  (C3), e.g. "'Tracker::missing' was not found in the current model";
+   *  undefined once dismissed, manually re-selected, or a fresh parse starts
+   *  (a fresh resolution attempt). */
+  selectionNotice: string | undefined;
 
   private readonly parseJob: OpenseParseJob;
 
@@ -189,6 +195,9 @@ export class OpenseWorkspaceController implements ReactiveController {
     if (this.parseRequest !== undefined) return this.parseRequest;
     this.loading = true;
     this.error = undefined;
+    // C3: a fresh parse is a fresh resolution attempt — the previous miss's
+    // notice must not survive into the new report.
+    this.selectionNotice = undefined;
     this.requestUpdate();
 
     // One AbortController per run (W3). Only capability-v1 hosts accept the
@@ -210,12 +219,32 @@ export class OpenseWorkspaceController implements ReactiveController {
         this.result = result;
         this.stale = false;
         this.error = undefined;
-        // W4 deep link: a query element id wins over the previous selection —
-        // restore it only if the fresh outline still has that id (fail-safe:
-        // a stale URL selects nothing, never the wrong element). Without a
-        // query id, keep the previous selection when it survives the re-parse.
-        const requested = navigationElementId(this.context.navigation);
-        this.selectedId = selectionIn(result.report.outline, this.kindFilter, requested ?? this.selectedId);
+        // W4 deep link, hardened by C1/C3. Precedence: the `element` query
+        // first (C3: exact visible row id, then normalized qualified name),
+        // then the `file` query (C1: first named row declared in that file —
+        // never mirrored into the `element` key), then the previous
+        // surviving selection. An `element` query that resolves to nothing
+        // selects nothing and raises the dismissible notice instead of
+        // failing silently (C3); a `file` query miss just selects nothing.
+        // Without any query, keep the previous selection when it survives the
+        // re-parse (W4a fail-safe: a stale URL never selects the wrong
+        // element).
+        const requestedElement = navigationElementId(this.context.navigation);
+        if (requestedElement !== undefined) {
+          const exact = selectionIn(result.report.outline, this.kindFilter, requestedElement);
+          const byName = exact === undefined
+            ? selectionByQualifiedName(result.report.outline, this.kindFilter, requestedElement)
+            : undefined;
+          this.selectedId = exact ?? byName;
+          if (this.selectedId === undefined) {
+            this.selectionNotice = `'${requestedElement}' was not found in the current model`;
+          }
+        } else {
+          const requestedFile = navigationFileId(this.context.navigation);
+          this.selectedId = requestedFile === undefined
+            ? selectionIn(result.report.outline, this.kindFilter, this.selectedId)
+            : selectionByFile(result, this.kindFilter, requestedFile);
+        }
       })
       .catch((error: unknown) => {
         if (abort.signal.aborted) return;
@@ -243,6 +272,8 @@ export class OpenseWorkspaceController implements ReactiveController {
    *  still applied locally. */
   selectRow(rowId: string): boolean {
     this.selectedId = rowId;
+    // C3: a manual selection answers the dangling deep-link notice.
+    this.selectionNotice = undefined;
     // W4: mirror the selection into the contribution-scoped query so the URL
     // round-trips. `set` is typed `void` but PI-WEB returns false when the
     // retained context is stale (mirror the host terminal runtime); checking
@@ -256,7 +287,16 @@ export class OpenseWorkspaceController implements ReactiveController {
   setKindFilter(kind: Member["kind"] | undefined): void {
     this.kindFilter = kind;
     // A filtered-out selection would leave a dangling detail pane; drop it.
+    // (C3: kind-filter changes keep today's dangling-drop behavior — the
+    // deep-link notice, if any, is untouched here.)
     if (this.result !== undefined) this.selectedId = selectionIn(this.result.report.outline, kind, this.selectedId);
+    this.requestUpdate();
+  }
+
+  /** Dismiss the deep-link notice (C3): clears it without touching the
+   *  selection or the navigation query. */
+  dismissSelectionNotice(): void {
+    this.selectionNotice = undefined;
     this.requestUpdate();
   }
 
@@ -300,6 +340,54 @@ function navigationElementId(navigation: WorkspacePanelNavigationV1 | undefined)
   const value = navigation?.query["element"];
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value[0];
+  return undefined;
+}
+
+/** The deep-linked file path (C1), or undefined when the host supplies no
+ *  navigation / no `file` query key. Mirrors `navigationElementId`; a
+ *  repeated key takes its first value. */
+function navigationFileId(navigation: WorkspacePanelNavigationV1 | undefined): string | undefined {
+  const value = navigation?.query["file"];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0];
+  return undefined;
+}
+
+/** C3: the first kind-visible NAMED row whose qualified name normalizes
+ *  equal to the requested value — resolves quoting differences between
+ *  chat-written names and parser row ids (e.g. `Tracker::needs focus` →
+ *  the row `Tracker::'needs focus'`). The normalizer is a faithful
+ *  MIRROR of the vendored parser's comparison key (`get()`'s fallback
+ *  in the bundle), not the shared code path: `elementDetails` normalizes
+ *  inside the bundle, so — as long as the mirror stays faithful — the two
+ *  cannot drift semantically. */
+function selectionByQualifiedName(
+  outline: OutlineRow[],
+  filter: Member["kind"] | undefined,
+  requested: string,
+): string | undefined {
+  const normalized = normalizedQualifiedName(requested);
+  const rows = filter === undefined ? outline : outline.filter((row) => row.kind === filter);
+  for (const row of rows) {
+    if (row.qualifiedName === undefined) continue;
+    if (normalizedQualifiedName(row.qualifiedName) === normalized) return row.id;
+  }
+  return undefined;
+}
+
+/** C1: the first kind-visible NAMED row declared in the deep-linked file —
+ *  `elementDetails` resolves each row's declaring file exactly the way the
+ *  detail pane does (`workspace.originOf`). A miss selects nothing. */
+function selectionByFile(
+  result: OpenseParseResult,
+  filter: Member["kind"] | undefined,
+  path: string,
+): string | undefined {
+  const rows = filter === undefined ? result.report.outline : result.report.outline.filter((row) => row.kind === filter);
+  for (const row of rows) {
+    if (row.name === undefined) continue;
+    if (elementDetails(result.index, result.workspace, row.id)?.declaringFile === path) return row.id;
+  }
   return undefined;
 }
 

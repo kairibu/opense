@@ -14,7 +14,7 @@ import {
   type ModelIndex,
   type SysmlModel,
 } from "./vendor/sysml-parser.bundle.js";
-import { elementDetails, namedOutlineKinds, namedOutlineRows, outlineRows } from "./opense-outline.js";
+import { elementDetails, namedOutlineKinds, namedOutlineRows, normalizedQualifiedName, outlineRows } from "./opense-outline.js";
 
 const originStub = { originOf: () => undefined };
 
@@ -488,5 +488,32 @@ describe("injected index seam (pure over the ModelIndex surface)", () => {
     if (details === undefined) throw new Error("expected details");
     expect(details.declaringFile).toBeUndefined();
     expect("declaringFile" in details).toBe(false);
+  });
+});
+
+describe("normalizedQualifiedName (mirror of the vendored parser's normalizer)", () => {
+  // Direct unit lock on the mirror of the bundle's comparison key
+  // (sysml-parser.bundle.js, src/query.ts — `get()`'s fallback):
+  // segment trimming, one-level quote stripping, and `[n]` sibling
+  // suffixes must match the vendored semantics exactly, or panel-side
+  // selection drifts from in-bundle detail resolution.
+
+  it("trims whitespace around ::-separated segments", () => {
+    expect(normalizedQualifiedName(" Tracker ::  Parts ::lens")).toBe("Tracker::Parts::lens");
+  });
+
+  it("strips exactly one level of '…' segment quoting", () => {
+    expect(normalizedQualifiedName("Tracker::'needs focus'")).toBe("Tracker::needs focus");
+    expect(normalizedQualifiedName("Tracker::''needs focus''")).toBe("Tracker::'needs focus'");
+  });
+
+  it("normalizes mixed quoting across segments to one comparison key", () => {
+    expect(normalizedQualifiedName("'Tracker'::needs focus"))
+      .toBe(normalizedQualifiedName("Tracker::'needs focus'"));
+  });
+
+  it("preserves [n] sibling suffixes, quoted or not", () => {
+    expect(normalizedQualifiedName("Tracker::'needs focus'[1]")).toBe("Tracker::needs focus[1]");
+    expect(normalizedQualifiedName("Tracker::needs focus[1]")).toBe("Tracker::needs focus[1]");
   });
 });
