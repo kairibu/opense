@@ -55,9 +55,14 @@ export const OPENSE_SESSION_METADATA_SCHEMA = 1;
  *  coordinated change with the label renderer, never a silent one. */
 export const OPENSE_SESSION_METADATA_MAX_ELEMENTS = 1;
 
-/** Per-element length bound. Qualified names are short; 128 characters is
- *  the shared C2/C4 candidate ceiling headroom, far above real names. */
-export const OPENSE_SESSION_METADATA_MAX_ELEMENT_LENGTH = 128;
+/** Per-element length bound. Qualified names are usually short, but real
+ *  SysML models can nest deeply (e.g. `Pkg::…::part::state`), so the bound
+ *  must accommodate long qualified names rather than truncate them — the
+ *  session name is the short (<= 60 char) display form, while the metadata
+ *  element keeps the full name so the label's reopen link can resolve it.
+ *  512 stays well under typical URL limits (~2000 chars) for the reopen
+ *  link's `element` query key. */
+export const OPENSE_SESSION_METADATA_MAX_ELEMENT_LENGTH = 512;
 
 /** The recognized op values for schema 1. Unlike opendoor's single-value
  *  first slice, BOTH values ship day one (E-D2′: investigate and task

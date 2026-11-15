@@ -143,7 +143,7 @@ export interface OpenseDispatchCommandArgs {
  * instruction. Returns `undefined` when there is no element at all (blank
  * command) — the caller reports usage. The element shape is NOT validated
  * here: `buildOpenseSessionMetadata` is the single strict validator (safe
- * token ≤ 128 characters under the shared C2/C4 qualified-name grammar), so
+ * token ≤ OPENSE_SESSION_METADATA_MAX_ELEMENT_LENGTH characters under the shared C2/C4 qualified-name grammar), so
  * a junk element is rejected by the shipped contract rather than by a
  * duplicate grammar in this module.
  */
